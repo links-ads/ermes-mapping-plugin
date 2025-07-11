@@ -8,14 +8,13 @@
 
 """
 
-__author__ = 'gaetano.chiriaco@linksfoundation.com'
-__date__ = '2025-07-11'
-__copyright__ = 'Copyright 2025, Gaetano Chiriaco - Links Foundation'
+__author__ = "gaetano.chiriaco@linksfoundation.com"
+__date__ = "2025-07-11"
+__copyright__ = "Copyright 2025, Gaetano Chiriaco - Links Foundation"
 
 import unittest
 
 from qgis.PyQt.QtGui import QIcon
-
 
 
 class ErmesQGISDialogTest(unittest.TestCase):
@@ -31,14 +30,12 @@ class ErmesQGISDialogTest(unittest.TestCase):
 
     def test_icon_png(self):
         """Test we can click OK."""
-        path = ':/plugins/ErmesQGIS/icon.png'
+        path = ":/plugins/ErmesQGIS/icon.png"
         icon = QIcon(path)
         self.assertFalse(icon.isNull())
+
 
 if __name__ == "__main__":
     suite = unittest.makeSuite(ErmesQGISResourcesTest)
     runner = unittest.TextTestRunner(verbosity=2)
     runner.run(suite)
-
-
-
