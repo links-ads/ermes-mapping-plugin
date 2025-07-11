@@ -120,13 +120,13 @@ class RabbitMQWorker(QObject):
         try:
             self.status_updated.emit("Worker: Connecting to RabbitMQ")
             self._check_connection()
-            self.channel.queue_declare(queue=self.queue_name, durable=True)
+            self.channel.queue_declare(queue=self.queue_name, auto_delete=True)
             self.status_updated.emit(f"Created queue {self.queue_name}")
 
             self.channel.queue_bind(
                 exchange=self.exchange,
                 queue=self.queue_name,
-                routing_key=f"test.status.orch.{self.user_id}.#",
+                routing_key=f"test.status.orch.*.*.{self.user_id}.#",
             )
             self.status_updated.emit(
                 f"Worker: Listening on queue '{self.queue_name}'..."
@@ -260,14 +260,6 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
 
             connection = pika.BlockingConnection(connection_parameters)
             channel = connection.channel()
-            channel.queue_declare(queue=f"qgis_user_{user_id}", durable=True)
-            self.update_status(f"Created queue qgis_user_{user_id}")
-
-            channel.queue_bind(
-                exchange=self.exchange,
-                queue=f"qgis_user_{user_id}",
-                routing_key=f"test.request.{user_id}",
-            )
 
             # The message is a simple string here, but JSON is better
             message_dict = {
@@ -328,6 +320,9 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         self.worker.finished.connect(self.worker.deleteLater)
         self.thread.finished.connect(self.thread.deleteLater)
 
+        # Connect the thread's finished signal to our cleanup method
+        self.thread.finished.connect(self.cleanup_thread)
+
         self.worker.layer_ready.connect(self.load_layer)
         self.worker.status_updated.connect(self.update_status)
         self.worker.error.connect(lambda msg: self.update_status(msg, "error"))
@@ -380,3 +375,17 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
             self.thread.quit()
             self.thread.wait()  # Wait for the thread to finish
         event.accept()
+
+    def cleanup_thread(self):
+        """
+        Cleans up thread and worker references after the thread has finished.
+        This slot is connected to the thread's finished signal.
+        """
+        self.update_status("Listener stopped.", "info")
+
+        # Re-enable the button so the user can start another listener
+        self.btn_startListening.setEnabled(True)
+
+        # Set the Python references to None
+        self.thread = None
+        self.worker = None
