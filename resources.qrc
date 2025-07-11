@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/plugins/ermes_qgis" >
+        <file>icon.png</file>
+    </qresource>
+</RCC>
