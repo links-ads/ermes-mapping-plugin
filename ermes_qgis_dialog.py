@@ -34,20 +34,25 @@ from qgis.core import (
     QgsMapLayerProxyModel,
     QgsGeometry,
     QgsVectorLayer,
+    QgsApplication,
 )
 from qgis.PyQt.QtCore import QObject, QThread, pyqtSignal, QDateTime
 import ssl
 import pika
 import json
-from datetime import datetime
 
 from shapely.wkt import loads as wkt_loads
 from shapely.geometry import mapping
 from shapely.ops import unary_union
 import uuid
+import requests
+import zipfile
+import tempfile
+
+import shutil
 
 
-class RabbitMQWorker(QObject):
+class MainWorker(QObject):
 
     finished = pyqtSignal()
     layer_ready = pyqtSignal(str)
@@ -78,6 +83,12 @@ class RabbitMQWorker(QObject):
         self.queue_name = f"qgis_user_{user_id}"
         self.user_id = user_id
         self.is_running = True
+        self.oauth_user = ""
+        self.oauth_password = ""
+        self.oauth_app_id = ""
+        self.oauth_api_key = ""
+        self.auth_url = ""
+
         self.create_connection()
 
     def create_connection(self):
@@ -112,9 +123,38 @@ class RabbitMQWorker(QObject):
         ):
             self.create_connection()
 
-    def _download_resource(self, url, local_path):
-        self.status_updated.emit(f"Downloading {url} to {local_path}")
-        return local_path
+    def _get_access(self):
+        data = {
+            "loginId": self.oauth_user,
+            "password": self.oauth_password,
+            "applicationId": self.oauth_app_id,
+            "noJwt": "false",
+        }
+        headers = {
+            "Authorization": self.oauth_api_key,
+            "Content-Type": "application/json",
+        }
+        response = requests.post(self.auth_url, json=data, headers=headers)
+        response.raise_for_status()
+        self.access_token = response.json()["token"]
+        self.refresh_token = response.json()["refreshToken"]
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+    def _download_resource(self, url):
+        self.status_updated.emit(f"Downloading from {url}")
+        header = self._get_access()
+        cache_path = f"./tmp/{uuid.uuid4()}/{url.split('/')[-1]}"
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+
+        with requests.get(url, headers=header, stream=True) as response:
+            response.raise_for_status()
+            with open(cache_path, "wb") as f:
+                # Iterate over the response data in chunks
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:  # Filter out keep-alive chunks
+                        f.write(chunk)
+
+        return cache_path
 
     def run(self):
         try:
@@ -149,12 +189,13 @@ class RabbitMQWorker(QObject):
             self.status_updated.emit(f"Worker: Received message: {body}")
             message = json.loads(body)
 
-            if message.get("type") == "end" and "url" in message:
-                url = message["url"]
+            if message.get("type") == "end" and "urls" in message:
+                url = message["urls"]
                 self.status_updated.emit(
-                    f"Worker: 'end' message received. Downloading from {url}"
+                    f"Worker: 'ends' message received. Downloading from {url[0]}"
                 )
-                local_path = self._download_resource(url, "test_path")
+                local_path = self._download_resource(url[0])
+                self.status_updated.emit(f"Worker: Downloaded to {local_path}")
                 self.layer_ready.emit(local_path)
         except Exception as e:
             self.error.emit(f"Download Error: {e}")
@@ -183,8 +224,13 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         # #widgets-and-dialogs-with-auto-connect
         self.setupUi(self)
         self.mcb_polygonLayer.setFilters(QgsMapLayerProxyModel.PolygonLayer)
-        self.dte_startDate.setDateTime(QDateTime.currentDateTime())
-        self.dte_endDate.setDateTime(QDateTime.currentDateTime())
+        self.dte_startDate.setDateTime(QDateTime.currentDateTimeUtc())
+        self.dte_endDate.setDateTime(QDateTime.currentDateTimeUtc())
+
+        # --- NEW: Setup for temporary directory management ---
+        self.temp_dirs_to_clean = []
+        # Connect our cleanup function to the QGIS application's closing signal
+        QgsApplication.instance().aboutToQuit.connect(self.cleanup_temp_dirs)
 
         self.thread = None
         self.worker = None
@@ -192,10 +238,10 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         self.ca_file = os.path.join(plugin_dir, "certs/ca_certificate.pem")
         self.cert_file = os.path.join(plugin_dir, "certs/client_links_certificate.pem")
         self.key_file = os.path.join(plugin_dir, "certs/client_links_key.pem")
-        self.host = "bus.gaia-project.cloud"
-        self.port = "5671"
-        self.vhost = "gaia-dev"
-        self.exchange = "gaia.test"
+        self.host = ""
+        self.port = ""
+        self.vhost = ""
+        self.exchange = ""
         self.pipeline_map = {
             "Burned area delineation": "fire_burned_area_delineation",
             "Burn Severity estimation": "fire_burned_area_severity_estimation",
@@ -203,7 +249,7 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         }
 
         # Connect UI signals to methods
-        self.btn_startListening.clicked.connect(self.start_listening)
+        self.btn_sendRequest.clicked.connect(self.start_listening)
         self.btn_sendRequest.clicked.connect(self.send_request)
 
         # Set default values for convenience
@@ -301,7 +347,7 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         # 1. Create a QThread
         self.thread = QThread()
         # 2. Create a worker
-        self.worker = RabbitMQWorker(
+        self.worker = MainWorker(
             ca_file=self.ca_file,
             cert_file=self.cert_file,
             key_file=self.key_file,
@@ -330,29 +376,126 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         # 5. Start the thread
         self.thread.start()
 
-        self.btn_startListening.setEnabled(False)
+        self.btn_sendRequest.setEnabled(False)
         self.update_status("Listener started. Waiting for messages...", "info")
 
-    def load_layer(self, file_path, layer_name):
+    def load_layer(self, file_path):
         """Loads the downloaded file into QGIS. This runs on the main thread."""
-        self.update_status(f"Loading layer: {layer_name}", "info")
+        self.update_status(
+            f"Processing downloaded file: {os.path.basename(file_path)}", "info"
+        )
+        layer_name = os.path.splitext(os.path.basename(file_path))[0]
 
-        # Note: This is a simple example. For ZIP files, you would need to
-        # unzip the file first and then find the appropriate .tif or .shp file inside.
-        if file_path.lower().endswith((".tif", ".tiff")):
-            layer = QgsRasterLayer(file_path, layer_name)
-            if not layer.isValid():
-                self.update_status(
-                    f"Error: Failed to load raster layer {layer_name}", "error"
-                )
-                return
-            QgsProject.instance().addMapLayer(layer)
-            self.update_status(f"Successfully loaded {layer_name}", "success")
+        # --- HANDLE ZIP ARCHIVES ---
+        if file_path.lower().endswith(".zip"):
+            self.handle_zip_file(file_path, layer_name)
+        # --- HANDLE SINGLE TIF/TIFF FILES ---
+        elif file_path.lower().endswith((".tif", ".tiff")):
+            self.handle_single_tif(file_path, layer_name)
+            # --- HANDLE UNSUPPORTED FILES ---
         else:
             self.update_status(
                 f"Warning: File type not supported for auto-loading: {file_path}",
                 "warning",
             )
+
+    def handle_single_tif(self, file_path, layer_name):
+        """Loads a single TIF file as a QGIS layer."""
+        self.update_status(f"Loading raster layer: {layer_name}", "info")
+        layer = QgsRasterLayer(file_path, layer_name)
+
+        if not layer.isValid():
+            self.update_status(
+                f"Error: Failed to load raster layer {layer_name}", "error"
+            )
+            return
+
+        QgsProject.instance().addMapLayer(layer)
+        self.update_status(f"Successfully loaded {layer_name}", "success")
+
+    def handle_zip_file(self, zip_path, group_name):
+        """
+        Unzips an archive and loads all contained .tif files into a new layer group.
+        """
+        # Use a temporary directory that is automatically cleaned up
+
+        extract_dir = tempfile.mkdtemp(prefix="qgis_ermes_")
+        self.temp_dirs_to_clean.append(extract_dir)
+
+        self.update_status(
+            f"Unzipping '{os.path.basename(zip_path)}' to a temporary location...",
+            "info",
+        )
+
+        try:
+            # Extract the zip file
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                zip_ref.extractall(extract_dir)
+            try:
+                os.remove(zip_path)
+                self.update_status(
+                    f"Removed original archive: {os.path.basename(zip_path)}", "info"
+                )
+            except OSError as e:
+                self.update_status(
+                    f"Warning: Could not remove original zip file {zip_path}: {e}",
+                    "warning",
+                )
+        except zipfile.BadZipFile:
+            self.update_status(
+                f"Error: '{os.path.basename(zip_path)}' is not a valid zip file.",
+                "error",
+            )
+            return
+        except Exception as e:
+            self.update_status(f"Error extracting zip file: {e}", "error")
+            return
+
+        # Scan the extracted directory for .tif files
+        tiff_files = []
+        for root_dir, _, files in os.walk(extract_dir):
+            for file in files:
+                if file.lower().endswith((".tif", ".tiff")):
+                    tiff_files.append(os.path.join(root_dir, file))
+
+        if not tiff_files:
+            self.update_status(
+                f"No .tif files were found inside '{os.path.basename(zip_path)}'.",
+                "warning",
+            )
+            return
+
+        # Get the project instance and the root of the layer tree
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+
+        # Create a new group in the layer tree. The group_name comes from layer_name.
+        group = root.addGroup(group_name)
+
+        loaded_count = 0
+        for tiff_path in tiff_files:
+            # Use the tif's own filename as the layer name
+            individual_layer_name = os.path.splitext(os.path.basename(tiff_path))[0]
+
+            layer = QgsRasterLayer(tiff_path, individual_layer_name)
+            if not layer.isValid():
+                self.update_status(
+                    f"Skipping invalid raster: {individual_layer_name}", "warning"
+                )
+                continue
+
+            # Add the layer to the project's internal registry, but NOT to the legend yet (False).
+            # This prevents it from appearing at the top level.
+            project.addMapLayer(layer, False)
+
+            # Now, add the layer to our newly created group.
+            group.addLayer(layer)
+            loaded_count += 1
+
+        self.update_status(
+            f"Successfully loaded {loaded_count} layer(s) into group '{group_name}'.",
+            "success",
+        )
 
     def update_status(self, message, level="info"):
         """Updates the status label and logs to QGIS log."""
@@ -384,8 +527,30 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         self.update_status("Listener stopped.", "info")
 
         # Re-enable the button so the user can start another listener
-        self.btn_startListening.setEnabled(True)
+        self.btn_sendRequest.setEnabled(True)
 
         # Set the Python references to None
         self.thread = None
         self.worker = None
+
+    def cleanup_temp_dirs(self):
+        """
+        This function is called when QGIS is about to quit.
+        It safely removes all temporary directories created during the session.
+        """
+        self.update_status(
+            f"Cleaning up {len(self.temp_dirs_to_clean)} temporary directories...",
+            "info",
+        )
+        for dir_path in self.temp_dirs_to_clean:
+            try:
+                # shutil.rmtree can remove a directory and all its contents
+                shutil.rmtree(dir_path)
+            except Exception as e:
+                # Log an error but don't prevent QGIS from closing
+                print(f"Could not remove temporary directory {dir_path}: {e}")
+                self.update_status(
+                    f"Warning: Could not remove temp dir {dir_path}", "warning"
+                )
+
+        self.temp_dirs_to_clean.clear()
