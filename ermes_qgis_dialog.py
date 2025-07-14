@@ -22,10 +22,19 @@
  ***************************************************************************/
 """
 
-import os
 
-from qgis.PyQt import uic
-from qgis.PyQt import QtWidgets
+import json
+import os
+import pika
+import requests
+from shapely.wkt import loads as wkt_loads
+from shapely.geometry import mapping
+import shutil
+import ssl
+import tempfile
+import uuid
+import zipfile
+
 from qgis.core import (
     QgsRasterLayer,
     QgsProject,
@@ -36,27 +45,20 @@ from qgis.core import (
     QgsVectorLayer,
     QgsApplication,
 )
+from qgis.PyQt import uic, QtWidgets
 from qgis.PyQt.QtCore import QObject, QThread, pyqtSignal, QDateTime
-import ssl
-import pika
-import json
-
-from shapely.wkt import loads as wkt_loads
-from shapely.geometry import mapping
-from shapely.ops import unary_union
-import uuid
-import requests
-import zipfile
-import tempfile
-
-import shutil
 
 
 class MainWorker(QObject):
 
+    # FLAGS
+    # Signals when Worker is finished, triggers clean-up and closes thread
     finished = pyqtSignal()
+    # Signals when the layer is ready to be downloaded on Datalake
     layer_ready = pyqtSignal(str)
+    # Used for INFO logging
     status_updated = pyqtSignal(str)
+    # Used for ERROR logging
     error = pyqtSignal(str)
 
     def __init__(
@@ -92,6 +94,9 @@ class MainWorker(QObject):
         self.create_connection()
 
     def create_connection(self):
+        """
+        Establishes a connection to the RabbitMQ message broker
+        """
         credentials = pika.credentials.ExternalCredentials()
         ssl_options = self._get_tls_parameters()
 
@@ -107,6 +112,11 @@ class MainWorker(QObject):
         self.channel = self.connection.channel()
 
     def _get_tls_parameters(self):
+        """
+        Gets the TLS parameters for the RabbitMQ connection
+
+        :returns: A pika.SSLOptions object.
+        """
         context = ssl.create_default_context(cafile=self.ca_file)
         context.verify_mode = ssl.CERT_REQUIRED
         context.load_cert_chain(
@@ -116,6 +126,9 @@ class MainWorker(QObject):
         return pika.SSLOptions(context, server_hostname=self.host)
 
     def _check_connection(self):
+        """
+        Checks if the connection is valid and if not, creates a new connection.
+        """
         if (
             self.connection is None
             or self.connection.is_closed
@@ -124,6 +137,13 @@ class MainWorker(QObject):
             self.create_connection()
 
     def _get_access(self):
+        """
+        Retrieves access tokens by authenticating with the OAuth service of DataLake
+
+        :returns: A dictionary containing the Authorization header with the Bearer token.
+        :raises HTTPError: If the authentication request fails.
+        """
+
         data = {
             "loginId": self.oauth_user,
             "password": self.oauth_password,
@@ -140,7 +160,15 @@ class MainWorker(QObject):
         self.refresh_token = response.json()["refreshToken"]
         return {"Authorization": f"Bearer {self.access_token}"}
 
-    def _download_resource(self, url):
+    def _download_resource(self, url: str):
+        """
+        Downloads a resource from the given DataLake URL and saves it to a temporary cache path.
+
+        :param url: The URL of the resource to be downloaded.
+        :return: The local cache path where the downloaded resource is saved.
+        :raises HTTPError: If the HTTP request to the URL fails.
+        """
+
         self.status_updated.emit(f"Downloading from {url}")
         header = self._get_access()
         cache_path = f"./tmp/{uuid.uuid4()}/{url.split('/')[-1]}"
@@ -157,6 +185,14 @@ class MainWorker(QObject):
         return cache_path
 
     def run(self):
+        """
+        Start consuming messages from the RabbitMQ queue.
+
+        This method will run indefinitely until an exception is raised or the plugin is closed.
+        When the method finishes, the `finished` signal will be emitted.
+
+        :raises Exception: If an exception occurs while consuming messages.
+        """
         try:
             self.status_updated.emit("Worker: Connecting to RabbitMQ")
             self._check_connection()
@@ -184,7 +220,21 @@ class MainWorker(QObject):
             self.finished.emit()
 
     def message_callback(self, ch, method, properties, body):
-        """Called when a message is received"""
+        """
+        Callback function to process incoming messages from RabbitMQ.
+
+        This function is called when a message is received from the RabbitMQ queue.
+        It will attempt to parse the message as JSON and extract the URL of the resource
+        to download. If the message is of type "end" and contains a "urls" field, it will
+        attempt to download the resource from the first URL in the list and emit the
+        `layer_ready` signal with the local path of the downloaded file.
+
+        :param ch: Pika channel object
+        :param method: Pika method object
+        :param properties: Pika properties object
+        :param body: Message body as a bytes object
+        :raises Exception: If an exception occurs while processing the message
+        """
         try:
             self.status_updated.emit(f"Worker: Received message: {body}")
             message = json.loads(body)
@@ -201,13 +251,12 @@ class MainWorker(QObject):
             self.error.emit(f"Download Error: {e}")
 
     def stop(self):
-        """Stops the consumer."""
+        """Stops the consumer. Called when the plugin is closed."""
         self.status_updated.emit("Worker: Stopping...")
         if self.channel and self.channel.is_open:
             self.channel.stop_consuming()
 
 
-# This loads your .ui file so that PyQt can populate your plugin with the elements from Qt Designer
 FORM_CLASS, _ = uic.loadUiType(
     os.path.join(os.path.dirname(__file__), "ermes_qgis_dialog_base.ui")
 )
@@ -215,25 +264,25 @@ FORM_CLASS, _ = uic.loadUiType(
 
 class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
     def __init__(self, parent=None):
-        """Constructor."""
+
         super(ErmesQGISDialog, self).__init__(parent)
-        # Set up the user interface from Designer through FORM_CLASS.
-        # After self.setupUi() you can access any designer object by doing
-        # self.<objectname>, and you can use autoconnect slots - see
-        # http://qt-project.org/doc/qt-4.8/designer-using-a-ui-file.html
-        # #widgets-and-dialogs-with-auto-connect
         self.setupUi(self)
+
+        # Sets up default values and conditions for the dialog components
         self.mcb_polygonLayer.setFilters(QgsMapLayerProxyModel.PolygonLayer)
         self.dte_startDate.setDateTime(QDateTime.currentDateTimeUtc())
         self.dte_endDate.setDateTime(QDateTime.currentDateTimeUtc())
+        self.le_userID.setText("")
 
-        # --- NEW: Setup for temporary directory management ---
+        # Setup for temporary directory management
         self.temp_dirs_to_clean = []
-        # Connect our cleanup function to the QGIS application's closing signal
         QgsApplication.instance().aboutToQuit.connect(self.cleanup_temp_dirs)
 
+        # Worker utils
         self.thread = None
         self.worker = None
+
+        # Setup for RabbitMQ
         plugin_dir = os.path.dirname(__file__)
         self.ca_file = os.path.join(plugin_dir, "certs/ca_certificate.pem")
         self.cert_file = os.path.join(plugin_dir, "certs/client_links_certificate.pem")
@@ -242,6 +291,8 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         self.port = ""
         self.vhost = ""
         self.exchange = ""
+
+        # Available pipelines
         self.pipeline_map = {
             "Burned area delineation": "fire_burned_area_delineation",
             "Burn Severity estimation": "fire_burned_area_severity_estimation",
@@ -252,17 +303,35 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         self.btn_sendRequest.clicked.connect(self.start_listening)
         self.btn_sendRequest.clicked.connect(self.send_request)
 
-        # Set default values for convenience
-        self.le_userID.setText("user123")
-
     def send_request(self):
-        """Sends a message to the RabbitMQ exchange."""
+        """
+        Sends a request to the RabbitMQ message broker with the selected parameters.
+
+        This function collects and validates the user inputs, constructs a message containing
+        the selected polygon layer's geometry, the chosen pipeline, and the time range. It
+        then sends this message to a specific queue on the RabbitMQ.
+
+        The process includes:
+
+        - Validating the selected polygon layer and its features.
+        - Constructing a unified geometry from all features in the layer.
+        - Converting the geometry to WKT format and loading it as a Shapely polygon.
+        - Constructing a message dictionary with the pipeline, geometry, and time range.
+        - Publishing the message to the RabbitMQ server.
+
+        If any error occurs during this process, it updates the status with an error message.
+
+        :raises Exception: If an error occurs during message sending or connection setup.
+        """
+
+        # Retrieve user inputs
         selected_layer = self.mcb_polygonLayer.currentLayer()
         pipeline_text = self.cmb_pipeline.currentText()
         start_dt = self.dte_startDate.dateTime().toPyDateTime()
         end_dt = self.dte_endDate.dateTime().toPyDateTime()
-        user_id = self.le_userID.text()  # This will be the routing key
+        user_id = self.le_userID.text()
 
+        # Input validation
         if not isinstance(selected_layer, QgsVectorLayer):
             self.update_status("Error: Please select a valid polygon layer.", "error")
             return
@@ -286,6 +355,7 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
             self.update_status("Error: All fields are required to send.", "error")
             return
 
+        # Start Processing
         try:
             self.update_status("Sending message...")
             credentials = pika.credentials.ExternalCredentials()
@@ -307,12 +377,9 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
             connection = pika.BlockingConnection(connection_parameters)
             channel = connection.channel()
 
-            # The message is a simple string here, but JSON is better
             message_dict = {
                 "datatype_id": self.pipeline_map[pipeline_text],
-                "geometry": mapping(
-                    shapely_polygon
-                ),  # Send the geometry as a WKT string
+                "geometry": mapping(shapely_polygon),
                 "start": start_dt.isoformat(),
                 "end": end_dt.isoformat(),
             }
@@ -325,7 +392,7 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
                     delivery_mode=2,
                     message_id=f"{user_id}.{str(uuid.uuid4())}",
                     user_id="links",
-                ),  # make message persistent
+                ),
             )
             connection.close()
             self.update_status(f"Message sent to user '{user_id}'.", "info")
@@ -344,9 +411,9 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
             self.update_status("Error: Connection fields are required.", "error")
             return
 
-        # 1. Create a QThread
+        # Create a QThread
         self.thread = QThread()
-        # 2. Create a worker
+        # Create a worker
         self.worker = MainWorker(
             ca_file=self.ca_file,
             cert_file=self.cert_file,
@@ -357,10 +424,10 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
             port=self.port,
             vhost=self.vhost,
         )
-        # 3. Move worker to the thread
+        # Move worker to the thread
         self.worker.moveToThread(self.thread)
 
-        # 4. Connect signals and slots
+        # Connect signals and slots
         self.thread.started.connect(self.worker.run)
         self.worker.finished.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
@@ -373,9 +440,10 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         self.worker.status_updated.connect(self.update_status)
         self.worker.error.connect(lambda msg: self.update_status(msg, "error"))
 
-        # 5. Start the thread
+        # Start the thread
         self.thread.start()
 
+        # Disable button
         self.btn_sendRequest.setEnabled(False)
         self.update_status("Listener started. Waiting for messages...", "info")
 
