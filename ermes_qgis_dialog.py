@@ -40,7 +40,6 @@ from qgis.core import (
     QgsProject,
     QgsMessageLog,
     Qgis,
-    QgsMapLayerProxyModel,
     QgsGeometry,
     QgsVectorLayer,
     QgsApplication,
@@ -63,9 +62,9 @@ class MainWorker(QObject):
 
     def __init__(
         self,
-        ca_file: str,
-        cert_file: str,
-        key_file: str,
+        broker_ca_file: str,
+        broker_cert_file: str,
+        broker_key_file: str,
         user_id: str,
         exchange: str,
         host: str = "localhost",
@@ -73,9 +72,9 @@ class MainWorker(QObject):
         vhost: str = "/",
     ):
         super().__init__()
-        self.ca_file = ca_file
-        self.cert_file = cert_file
-        self.key_file = key_file
+        self.ca_file = "ca_file"
+        self.cert_file = "cert_file"
+        self.key_file = "key_file"
         self.host = host
         self.port = port
         self.vhost = vhost
@@ -262,17 +261,11 @@ FORM_CLASS, _ = uic.loadUiType(
 )
 
 
-class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
+class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
     def __init__(self, parent=None):
 
         super(ErmesQGISDialog, self).__init__(parent)
         self.setupUi(self)
-
-        # Sets up default values and conditions for the dialog components
-        self.mcb_polygonLayer.setFilters(QgsMapLayerProxyModel.PolygonLayer)
-        self.dte_startDate.setDateTime(QDateTime.currentDateTimeUtc())
-        self.dte_endDate.setDateTime(QDateTime.currentDateTimeUtc())
-        self.le_userID.setText("")
 
         # Setup for temporary directory management
         self.temp_dirs_to_clean = []
@@ -300,8 +293,15 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         }
 
         # Connect UI signals to methods
-        self.btn_sendRequest.clicked.connect(self.start_listening)
-        self.btn_sendRequest.clicked.connect(self.send_request)
+        # Login
+        self.loginPushButton.clicked.connect(self.login)
+
+        self.requestPushButton.clicked.connect(self.start_listening)
+        self.requestPushButton.clicked.connect(self.send_request)
+
+    def login(self, *_):
+        # TODO: add login logic
+        pass
 
     def send_request(self):
         """
@@ -444,7 +444,7 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         self.thread.start()
 
         # Disable button
-        self.btn_sendRequest.setEnabled(False)
+        self.requestPushButton.setEnabled(False)
         self.update_status("Listener started. Waiting for messages...", "info")
 
     def load_layer(self, file_path):
@@ -567,7 +567,7 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
 
     def update_status(self, message, level="info"):
         """Updates the status label and logs to QGIS log."""
-        self.lbl_status.setText(message)
+        self.textLogger.setText(message)
         log_level = Qgis.Info
         if level == "error":
             log_level = Qgis.Critical
@@ -595,7 +595,7 @@ class ErmesQGISDialog(QtWidgets.QDialog, FORM_CLASS):
         self.update_status("Listener stopped.", "info")
 
         # Re-enable the button so the user can start another listener
-        self.btn_sendRequest.setEnabled(True)
+        self.requestPushButton.setEnabled(True)
 
         # Set the Python references to None
         self.thread = None
