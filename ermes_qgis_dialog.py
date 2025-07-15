@@ -318,7 +318,10 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.pipeline_map = {
             "Burned area delineation": "fire_burned_area_delineation",
             "Burn Severity estimation": "fire_burned_area_severity_estimation",
+            "Active Flames and Smoke detection": "fire_active_flames_and_smoke_detection",
+            "Waterbody delineation": "flood_post_waterbody_delineation",
             "Sentinel-2 image": "fire_satellite_image_sentinel_2",
+            "Sentinel-1 image": "flood_satellite_image_sentinel_1",
         }
 
         # Connect UI signals to methods
