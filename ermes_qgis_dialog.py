@@ -45,7 +45,23 @@ from qgis.core import (
     QgsApplication,
 )
 from qgis.PyQt import uic, QtWidgets
+from PyQt5.QtWidgets import QFileDialog
 from qgis.PyQt.QtCore import QObject, QThread, pyqtSignal, QDateTime
+from datetime import datetime
+
+
+def parse_date(date: str) -> str:
+    """If a date string is set it parses it into a format YYYY-MM-DD. In case parsing fails None is returned.
+
+    :param date: A string describing a date
+    :return: A string in a format YYYY-MM-DD, an empty string, or None
+    """
+    if date == "":
+        return date
+    try:
+        return datetime.fromisoformat(date).isoformat()
+    except ValueError:
+        return None
 
 
 class MainWorker(QObject):
@@ -70,11 +86,16 @@ class MainWorker(QObject):
         host: str = "localhost",
         port: int = 5672,
         vhost: str = "/",
+        datalake_oauth_user: str = "",
+        datalake_oauth_password: str = "",
+        datalake_oauth_app_id: str = "",
+        datalake_oauth_api_key: str = "",
+        datalake_auth_url: str = "",
     ):
         super().__init__()
-        self.ca_file = "ca_file"
-        self.cert_file = "cert_file"
-        self.key_file = "key_file"
+        self.ca_file = broker_ca_file
+        self.cert_file = broker_cert_file
+        self.key_file = broker_key_file
         self.host = host
         self.port = port
         self.vhost = vhost
@@ -84,11 +105,11 @@ class MainWorker(QObject):
         self.queue_name = f"qgis_user_{user_id}"
         self.user_id = user_id
         self.is_running = True
-        self.oauth_user = ""
-        self.oauth_password = ""
-        self.oauth_app_id = ""
-        self.oauth_api_key = ""
-        self.auth_url = ""
+        self.oauth_user = datalake_oauth_user
+        self.oauth_password = datalake_oauth_password
+        self.oauth_app_id = datalake_oauth_app_id
+        self.oauth_api_key = datalake_oauth_api_key
+        self.auth_url = datalake_auth_url
 
         self.create_connection()
 
@@ -280,10 +301,18 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.ca_file = os.path.join(plugin_dir, "certs/ca_certificate.pem")
         self.cert_file = os.path.join(plugin_dir, "certs/client_links_certificate.pem")
         self.key_file = os.path.join(plugin_dir, "certs/client_links_key.pem")
-        self.host = ""
-        self.port = ""
-        self.vhost = ""
-        self.exchange = ""
+        self.config_path = os.path.join(plugin_dir, "certs/config.json")
+        self.config = json.load(open(self.config_path))
+        self.active_time = None
+        self.host = self.config["broker_host"]
+        self.port = self.config["broker_port"]
+        self.vhost = self.config["broker_vhost"]
+        self.exchange = self.config["broker_exchange"]
+        self.datalake_oauth_user = self.config["datalake_oauth_user"]
+        self.datalake_oauth_password = self.config["datalake_oauth_password"]
+        self.datalake_oauth_app_id = self.config["datalake_oauth_app_id"]
+        self.datalake_oauth_api_key = self.config["datalake_oauth_api_key"]
+        self.datalake_oauth_url = self.config["datalake_oauth_url"]
 
         # Available pipelines
         self.pipeline_map = {
@@ -294,14 +323,57 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
 
         # Connect UI signals to methods
         # Login
+        self.certificatesPushButton.clicked.connect(self.load_certificates)
         self.loginPushButton.clicked.connect(self.login)
+        # Request
+        self.startDateLineEdit.mousePressEvent = lambda _: self.move_calendar(
+            "start_date"
+        )
+        self.endDateLineEdit.mousePressEvent = lambda _: self.move_calendar("end_date")
+        self.startDateLineEdit.editingFinished.connect(self.update_dates)
+        self.endDateLineEdit.editingFinished.connect(self.update_dates)
+        self.calendarWidget.clicked.connect(self.add_calendar_date)
 
         self.requestPushButton.clicked.connect(self.start_listening)
         self.requestPushButton.clicked.connect(self.send_request)
 
+    def move_calendar(self, active):
+        """Moves calendar between the "start time" and "end time" line edit fields"""
+        if active == "start_date":
+            self.calendarSpacer.hide()
+        else:
+            self.calendarSpacer.show()
+        self.active_time = active
+
+    def update_dates(self):
+        new_start_time = parse_date(self.startDateLineEdit.text())
+        new_end_time = parse_date(self.endDateLineEdit.text())
+
+        if new_start_time is None or new_end_time is None:
+            self.update_status("Error: Invalid date format.", "error")
+        elif new_start_time and new_end_time and new_start_time > new_end_time:
+            self.update_status("Error: Start date must be before end date.", "error")
+        else:
+            self.startDateLineEdit.setText(new_start_time)
+            self.endDateLineEdit.setText(new_end_time)
+
+    def add_calendar_date(self):
+        """Handles selected calendar date"""
+        calendar_time = str(self.calendarWidget.selectedDate().toPyDate())
+
+        if self.active_time == "start_date":
+            self.startDateLineEdit.setText(calendar_time)
+        else:
+            self.endDateLineEdit.setText(calendar_time)
+
+    def load_certificates(self, *_):
+        folder = QFileDialog.getOpenFileName(self, "Select certificates file")
+        self.certificatesLineEdit.setText(folder[0])
+
     def login(self, *_):
-        # TODO: add login logic
-        pass
+        if self.clientIdLineEdit.text():
+            self.clientIdLineEdit.setEnabled(False)
+            self.loginInfoLabel.setText("Login Successful✅")
 
     def send_request(self):
         """
@@ -325,11 +397,11 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         """
 
         # Retrieve user inputs
-        selected_layer = self.mcb_polygonLayer.currentLayer()
-        pipeline_text = self.cmb_pipeline.currentText()
-        start_dt = self.dte_startDate.dateTime().toPyDateTime()
-        end_dt = self.dte_endDate.dateTime().toPyDateTime()
-        user_id = self.le_userID.text()
+        selected_layer = self.mMapLayerComboBox.currentLayer()
+        pipeline_text = self.layerTypeComboBox.currentText()
+        start_dt = self.startDateLineEdit.text()
+        end_dt = self.endDateLineEdit.text()
+        user_id = self.clientIdLineEdit.text()
 
         # Input validation
         if not isinstance(selected_layer, QgsVectorLayer):
@@ -380,8 +452,8 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             message_dict = {
                 "datatype_id": self.pipeline_map[pipeline_text],
                 "geometry": mapping(shapely_polygon),
-                "start": start_dt.isoformat(),
-                "end": end_dt.isoformat(),
+                "start": start_dt,
+                "end": end_dt,
             }
 
             channel.basic_publish(
@@ -405,7 +477,7 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             self.update_status("Already listening.", "warning")
             return
 
-        user_id = self.le_userID.text()
+        user_id = self.clientIdLineEdit.text()
 
         if not all([user_id]):
             self.update_status("Error: Connection fields are required.", "error")
@@ -415,15 +487,21 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.thread = QThread()
         # Create a worker
         self.worker = MainWorker(
-            ca_file=self.ca_file,
-            cert_file=self.cert_file,
-            key_file=self.key_file,
+            broker_ca_file=self.ca_file,
+            broker_cert_file=self.cert_file,
+            broker_key_file=self.key_file,
             user_id=user_id,
             exchange=self.exchange,
             host=self.host,
             port=self.port,
             vhost=self.vhost,
+            datalake_oauth_user=self.datalake_oauth_user,
+            datalake_oauth_password=self.datalake_oauth_password,
+            datalake_oauth_app_id=self.datalake_oauth_app_id,
+            datalake_oauth_api_key=self.datalake_oauth_api_key,
+            datalake_auth_url=self.datalake_auth_url,
         )
+
         # Move worker to the thread
         self.worker.moveToThread(self.thread)
 
