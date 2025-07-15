@@ -90,7 +90,7 @@ class MainWorker(QObject):
         datalake_oauth_password: str = "",
         datalake_oauth_app_id: str = "",
         datalake_oauth_api_key: str = "",
-        datalake_auth_url: str = "",
+        datalake_oauth_url: str = "",
     ):
         super().__init__()
         self.ca_file = broker_ca_file
@@ -109,7 +109,7 @@ class MainWorker(QObject):
         self.oauth_password = datalake_oauth_password
         self.oauth_app_id = datalake_oauth_app_id
         self.oauth_api_key = datalake_oauth_api_key
-        self.auth_url = datalake_auth_url
+        self.auth_url = datalake_oauth_url
 
         self.create_connection()
 
@@ -499,7 +499,7 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             datalake_oauth_password=self.datalake_oauth_password,
             datalake_oauth_app_id=self.datalake_oauth_app_id,
             datalake_oauth_api_key=self.datalake_oauth_api_key,
-            datalake_auth_url=self.datalake_auth_url,
+            datalake_oauth_url=self.datalake_oauth_url,
         )
 
         # Move worker to the thread
