@@ -342,6 +342,9 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         # Setup jobs table
         self.setup_jobs_table()
 
+        # Initialize status messages list
+        self.status_messages = []
+
         # Connect UI signals to methods
         # Login
         self.loginPushButton.clicked.connect(self.login)
@@ -435,33 +438,32 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.jobsTableWidget.setRowCount(0)  # Clear existing rows
 
         for job in jobs:
-            # Only show "end" jobs with resource_url
-            if job.get("status") == "end" and job.get("resource_url"):
-                row = self.jobsTableWidget.rowCount()
-                self.jobsTableWidget.insertRow(row)
+            # Show all jobs regardless of status
+            row = self.jobsTableWidget.rowCount()
+            self.jobsTableWidget.insertRow(row)
 
-                datatype_id = job.get("body", {}).get("datatype_id", "")
-                start_date = job.get("body", {}).get("start_date", "")
-                end_date = job.get("body", {}).get("end_date", "")
+            datatype_id = job.get("body", {}).get("datatype_id", "")
+            start_date = job.get("body", {}).get("start_date", "")
+            end_date = job.get("body", {}).get("end_date", "")
 
-                # Add job data to table
-                self.jobsTableWidget.setItem(
-                    row, 0, QTableWidgetItem(str(job.get("id", "")))
-                )
-                self.jobsTableWidget.setItem(row, 1, QTableWidgetItem(datatype_id))
-                self.jobsTableWidget.setItem(
-                    row, 2, QTableWidgetItem(job.get("status", ""))
-                )
-                self.jobsTableWidget.setItem(
-                    row, 3, QTableWidgetItem(job.get("result", ""))
-                )
-                self.jobsTableWidget.setItem(
-                    row, 4, QTableWidgetItem(job.get("created_at", ""))
-                )
-                self.jobsTableWidget.setItem(row, 5, QTableWidgetItem(start_date))
-                self.jobsTableWidget.setItem(row, 6, QTableWidgetItem(end_date))
+            # Add job data to table
+            self.jobsTableWidget.setItem(
+                row, 0, QTableWidgetItem(str(job.get("id", "")))
+            )
+            self.jobsTableWidget.setItem(row, 1, QTableWidgetItem(datatype_id))
+            self.jobsTableWidget.setItem(
+                row, 2, QTableWidgetItem(job.get("status", ""))
+            )
+            self.jobsTableWidget.setItem(
+                row, 3, QTableWidgetItem(job.get("result", ""))
+            )
+            self.jobsTableWidget.setItem(
+                row, 4, QTableWidgetItem(job.get("created_at", ""))
+            )
+            self.jobsTableWidget.setItem(row, 5, QTableWidgetItem(start_date))
+            self.jobsTableWidget.setItem(row, 6, QTableWidgetItem(end_date))
 
-                self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
+            self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
 
     def download_selected_jobs(self):
         """Download and load selected jobs into QGIS"""
@@ -473,9 +475,9 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             self.update_status("No jobs selected for download.", "warning")
             return
 
-        self.update_status(
-            f"Downloading {len(selected_rows)} selected job(s)...", "info"
-        )
+        # Filter jobs that can be downloaded (end status with resource_url)
+        downloadable_jobs = []
+        non_downloadable_jobs = []
 
         for row in selected_rows:
             try:
@@ -484,15 +486,38 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
                 if job_item:
                     job_data = job_item.data(Qt.UserRole)
                     job_id = job_data.get("id")
+                    job_status = job_data.get("status")
+                    resource_url = job_data.get("resource_url")
 
-                    if job_id:
-                        # Download the job resource
-                        self.download_job_resource(job_id)
+                    if job_status == "end" and resource_url:
+                        downloadable_jobs.append((row, job_id))
+                    else:
+                        non_downloadable_jobs.append(job_id)
 
             except Exception as e:
-                self.update_status(
-                    f"Error downloading job from row {row}: {e}", "error"
-                )
+                self.update_status(f"Error processing job from row {row}: {e}", "error")
+
+        # Show warning for non-downloadable jobs
+        if non_downloadable_jobs:
+            self.update_status(
+                f"Warning: Jobs {non_downloadable_jobs} cannot be downloaded (not completed or no resource available).",
+                "warning",
+            )
+
+        if not downloadable_jobs:
+            self.update_status("No downloadable jobs selected.", "warning")
+            return
+
+        self.update_status(
+            f"Downloading {len(downloadable_jobs)} selected job(s)...", "info"
+        )
+
+        for row, job_id in downloadable_jobs:
+            try:
+                # Download the job resource
+                self.download_job_resource(job_id)
+            except Exception as e:
+                self.update_status(f"Error downloading job {job_id}: {e}", "error")
 
     def download_job_resource(self, job_id):
         """Download a specific job resource and load it into QGIS"""
@@ -881,7 +906,17 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
 
     def update_status(self, message, level="info"):
         """Updates the status label and logs to QGIS log."""
-        self.textLogger.setText(message)
+        # Add timestamp and format the message
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_message = f"[{timestamp}] {level.upper()}: {message}"
+
+        self.status_messages.append(formatted_message)
+        self.textLogger.setText("\n".join(self.status_messages))
+
+        # Auto-scroll to the bottom
+        scrollbar = self.textLogger.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
         log_level = Qgis.Info
         if level == "error":
             log_level = Qgis.Critical
