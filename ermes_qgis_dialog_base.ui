@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>858</width>
-    <height>593</height>
+    <width>862</width>
+    <height>602</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -38,7 +38,7 @@
          </sizepolicy>
         </property>
         <property name="currentIndex">
-         <number>0</number>
+         <number>2</number>
         </property>
         <widget class="QWidget" name="loginTab">
          <property name="mouseTracking">
@@ -70,8 +70,8 @@
               <rect>
                <x>0</x>
                <y>0</y>
-               <width>828</width>
-               <height>521</height>
+               <width>832</width>
+               <height>530</height>
               </rect>
              </property>
              <layout class="QGridLayout" name="gridLayout_8">
@@ -261,8 +261,8 @@
               <rect>
                <x>0</x>
                <y>0</y>
-               <width>836</width>
-               <height>443</height>
+               <width>840</width>
+               <height>452</height>
               </rect>
              </property>
              <layout class="QGridLayout" name="gridLayout_4">
@@ -1103,6 +1103,125 @@
              </item>
             </layout>
            </widget>
+          </item>
+         </layout>
+        </widget>
+        <widget class="QWidget" name="jobsTab">
+         <attribute name="title">
+          <string>Jobs</string>
+         </attribute>
+         <layout class="QVBoxLayout" name="jobsLayout">
+          <property name="leftMargin">
+           <number>5</number>
+          </property>
+          <property name="topMargin">
+           <number>5</number>
+          </property>
+          <property name="rightMargin">
+           <number>5</number>
+          </property>
+          <property name="bottomMargin">
+           <number>5</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="jobsTitleLabel">
+            <property name="text">
+             <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:12pt; font-weight:600;&quot;&gt;Job History&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
+            <property name="alignment">
+             <set>Qt::AlignCenter</set>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QTableWidget" name="jobsTableWidget">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="alternatingRowColors">
+             <bool>true</bool>
+            </property>
+            <property name="selectionBehavior">
+             <enum>QAbstractItemView::SelectRows</enum>
+            </property>
+            <property name="sortingEnabled">
+             <bool>true</bool>
+            </property>
+            <property name="cornerButtonEnabled">
+             <bool>false</bool>
+            </property>
+            <column>
+             <property name="text">
+              <string>Job ID</string>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>Layer Type</string>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>Status</string>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>Created</string>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>Completed</string>
+             </property>
+            </column>
+            <column>
+             <property name="text">
+              <string>Actions</string>
+             </property>
+            </column>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="jobsButtonLayout">
+            <item>
+             <widget class="QPushButton" name="refreshJobsButton">
+              <property name="text">
+               <string>Refresh</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="downloadJobButton">
+              <property name="text">
+               <string>Download Selected</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="deleteJobButton">
+              <property name="text">
+               <string>Delete Selected</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="jobsHorizontalSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+           </layout>
           </item>
          </layout>
         </widget>

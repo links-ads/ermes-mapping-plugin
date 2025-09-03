@@ -44,8 +44,11 @@ from qgis.core import (
     QgsApplication,
 )
 from qgis.PyQt import uic, QtWidgets
-from PyQt5.QtWidgets import QFileDialog
-from qgis.PyQt.QtCore import QObject, QThread, pyqtSignal, QDateTime
+from PyQt5.QtWidgets import QFileDialog, QTableWidgetItem, QHeaderView
+from qgis.PyQt.QtCore import QObject, QThread, pyqtSignal, QDateTime, QTimer
+
+# Store job data in the row for later use
+from PyQt5.QtCore import Qt
 
 
 def parse_date(date: str) -> str:
@@ -60,6 +63,62 @@ def parse_date(date: str) -> str:
         return datetime.fromisoformat(date).isoformat()
     except ValueError:
         return None
+
+
+class JobsWorker(QObject):
+    """Worker for fetching jobs from the API"""
+
+    # Signals
+    jobs_updated = pyqtSignal(list)  # Emits list of jobs
+    error = pyqtSignal(str)  # Emits error messages
+    finished = pyqtSignal()  # Emits when worker is finished
+
+    def __init__(self, api_base_url: str, access_token: str):
+        super().__init__()
+        self.api_base_url = api_base_url
+        self.access_token = access_token
+        self.is_running = True
+
+    def _authenticate(self):
+        """Returns authentication headers"""
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+    def _get_jobs(self):
+        """Fetches all jobs for the current user"""
+        headers = self._authenticate()
+        jobs_url = f"{self.api_base_url}/jobs/"
+
+        response = requests.get(jobs_url, headers=headers)
+        response.raise_for_status()
+
+        return response.json()["jobs"]
+
+    def run(self):
+        """Main worker loop - fetches jobs every 30 seconds"""
+        try:
+            while self.is_running:
+                try:
+                    jobs = self._get_jobs()
+                    self.jobs_updated.emit(jobs)
+                except requests.exceptions.RequestException as e:
+                    self.error.emit(f"Failed to fetch jobs: {e}")
+                except Exception as e:
+                    self.error.emit(f"Unexpected error: {e}")
+
+                # Wait 30 seconds before next fetch
+                for _ in range(30):
+                    if not self.is_running:
+                        break
+                    time.sleep(1)
+
+        except Exception as e:
+            self.error.emit(f"Worker error: {e}")
+        finally:
+            self.finished.emit()
+
+    def stop(self):
+        """Stops the worker"""
+        self.is_running = False
 
 
 class MainWorker(QObject):
@@ -248,6 +307,11 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.thread = None
         self.worker = None
 
+        # Jobs tab worker utils
+        self.jobs_thread = None
+        self.jobs_worker = None
+        self.jobs_timer = None
+
         # Setup for API
         plugin_dir = os.path.dirname(__file__)
         self.config_path = os.path.join(plugin_dir, "certs/config.json")
@@ -269,10 +333,14 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             "Sentinel-1 image": "flood_satellite_image_sentinel_1",
         }
 
-        # UI: Disable Request tab until login is successful
+        # UI: Disable Request and Jobs tabs until login is successful
         # Assumes self.tabWidget is the QTabWidget containing the tabs
-        # and that tab 0 is Login, tab 1 is Request
+        # and that tab 0 is Login, tab 1 is Request, tab 2 is Jobs
         self.tabWidget.setTabEnabled(1, False)
+        self.tabWidget.setTabEnabled(2, False)
+
+        # Setup jobs table
+        self.setup_jobs_table()
 
         # Connect UI signals to methods
         # Login
@@ -287,6 +355,201 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.calendarWidget.clicked.connect(self.add_calendar_date)
 
         self.requestPushButton.clicked.connect(self.send_request)
+
+        # Jobs tab
+        self.downloadJobButton.clicked.connect(self.download_selected_jobs)
+        self.deleteJobButton.clicked.connect(self.delete_selected_jobs)
+
+    def setup_jobs_table(self):
+        """Setup the jobs table with appropriate columns"""
+        # Assuming the table is named jobsTableWidget
+        if hasattr(self, "jobsTableWidget"):
+            self.jobsTableWidget.setColumnCount(7)
+            self.jobsTableWidget.setHorizontalHeaderLabels(
+                [
+                    "ID",
+                    "Pipeline",
+                    "Status",
+                    "Status Message",
+                    "Created",
+                    "Start Date",
+                    "End Date",
+                ]
+            )
+
+            # Set column widths
+            header = self.jobsTableWidget.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID
+            header.setSectionResizeMode(1, QHeaderView.Stretch)  # Pipeline
+            header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Status
+            header.setSectionResizeMode(
+                3, QHeaderView.ResizeToContents
+            )  # Status Message
+            header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Created
+            header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Start Date
+            header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # End Date
+
+            # Enable selection
+            self.jobsTableWidget.setSelectionBehavior(
+                QtWidgets.QAbstractItemView.SelectRows
+            )
+            self.jobsTableWidget.setSelectionMode(
+                QtWidgets.QAbstractItemView.MultiSelection
+            )
+
+    def start_jobs_monitoring(self):
+        """Start monitoring jobs from the API"""
+        if self.jobs_thread is not None and self.jobs_thread.isRunning():
+            self.update_status("Already monitoring jobs.", "warning")
+            return
+
+        # Create a QThread for jobs monitoring
+        self.jobs_thread = QThread()
+        # Create a jobs worker
+        self.jobs_worker = JobsWorker(
+            api_base_url=self.api_base_url, access_token=self.access_token
+        )
+
+        # Move worker to the thread
+        self.jobs_worker.moveToThread(self.jobs_thread)
+
+        # Connect signals and slots
+        self.jobs_thread.started.connect(self.jobs_worker.run)
+        self.jobs_worker.finished.connect(self.jobs_thread.quit)
+        self.jobs_worker.finished.connect(self.jobs_worker.deleteLater)
+        self.jobs_thread.finished.connect(self.jobs_thread.deleteLater)
+
+        # Connect worker signals
+        self.jobs_worker.jobs_updated.connect(self.update_jobs_table)
+        self.jobs_worker.error.connect(lambda msg: self.update_status(msg, "error"))
+
+        # Start the thread
+        self.jobs_thread.start()
+        self.update_status("Started monitoring jobs...", "info")
+
+    def update_jobs_table(self, jobs):
+        """Update the jobs table with the latest jobs data"""
+        if not hasattr(self, "jobsTableWidget"):
+            return
+
+        self.jobsTableWidget.setRowCount(0)  # Clear existing rows
+
+        for job in jobs:
+            # Only show "end" jobs with resource_url
+            if job.get("status") == "end" and job.get("resource_url"):
+                row = self.jobsTableWidget.rowCount()
+                self.jobsTableWidget.insertRow(row)
+
+                datatype_id = job.get("body", {}).get("datatype_id", "")
+                start_date = job.get("body", {}).get("start_date", "")
+                end_date = job.get("body", {}).get("end_date", "")
+
+                # Add job data to table
+                self.jobsTableWidget.setItem(
+                    row, 0, QTableWidgetItem(str(job.get("id", "")))
+                )
+                self.jobsTableWidget.setItem(row, 1, QTableWidgetItem(datatype_id))
+                self.jobsTableWidget.setItem(
+                    row, 2, QTableWidgetItem(job.get("status", ""))
+                )
+                self.jobsTableWidget.setItem(
+                    row, 3, QTableWidgetItem(job.get("result", ""))
+                )
+                self.jobsTableWidget.setItem(
+                    row, 4, QTableWidgetItem(job.get("created_at", ""))
+                )
+                self.jobsTableWidget.setItem(row, 5, QTableWidgetItem(start_date))
+                self.jobsTableWidget.setItem(row, 6, QTableWidgetItem(end_date))
+
+                self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
+
+    def download_selected_jobs(self):
+        """Download and load selected jobs into QGIS"""
+        selected_rows = set()
+        for item in self.jobsTableWidget.selectedItems():
+            selected_rows.add(item.row())
+
+        if not selected_rows:
+            self.update_status("No jobs selected for download.", "warning")
+            return
+
+        self.update_status(
+            f"Downloading {len(selected_rows)} selected job(s)...", "info"
+        )
+
+        for row in selected_rows:
+            try:
+                # Get job data from the table
+                job_item = self.jobsTableWidget.item(row, 0)
+                if job_item:
+                    job_data = job_item.data(Qt.UserRole)
+                    job_id = job_data.get("id")
+
+                    if job_id:
+                        # Download the job resource
+                        self.download_job_resource(job_id)
+
+            except Exception as e:
+                self.update_status(
+                    f"Error downloading job from row {row}: {e}", "error"
+                )
+
+    def download_job_resource(self, job_id):
+        """Download a specific job resource and load it into QGIS"""
+        try:
+            # Use the same download logic as in MainWorker
+            retrieve_url = f"{self.api_base_url}/retrieve/{job_id}"
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+
+            self.update_status(f"Downloading job {job_id}...", "info")
+
+            with requests.get(retrieve_url, headers=headers, stream=True) as response:
+                response.raise_for_status()
+
+                # Get filename from Content-Disposition header
+                content_disp = response.headers.get("Content-Disposition", "")
+                filename = None
+                if "filename=" in content_disp:
+                    filename = content_disp.split("filename=")[-1].strip('"; ')
+                if not filename:
+                    filename = f"{job_id}.zip"
+
+                # Save to temporary location
+                cache_dir = f"./tmp/{job_id}"
+                os.makedirs(cache_dir, exist_ok=True)
+                cache_path = os.path.join(cache_dir, filename)
+
+                with open(cache_path, "wb") as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+
+                # Load the downloaded file into QGIS
+                self.load_layer(cache_path)
+
+        except Exception as e:
+            self.update_status(f"Error downloading job {job_id}: {e}", "error")
+
+    def delete_selected_jobs(self):
+        """Mock delete functionality for selected jobs"""
+        selected_rows = set()
+        for item in self.jobsTableWidget.selectedItems():
+            selected_rows.add(item.row())
+
+        if not selected_rows:
+            self.update_status("No jobs selected for deletion.", "warning")
+            return
+
+        # Mock behavior - just show a message
+        self.update_status(
+            f"Mock: Would delete {len(selected_rows)} selected job(s). This functionality is not yet implemented.",
+            "info",
+        )
+
+        # In a real implementation, you would:
+        # 1. Call the API to delete the jobs
+        # 2. Remove the rows from the table
+        # 3. Update the jobs list
 
     def move_calendar(self, active):
         """Moves calendar between the "start time" and "end time" line edit fields"""
@@ -320,7 +583,7 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
     def login(self, *_):
         """
         Handles user login. Reads username and password from the UI,
-        sends them to the API, and if successful, enables the Request tab.
+        sends them to the API, and if successful, enables the Request and Jobs tabs.
         """
         username = (
             self.usernameLineEdit.text().strip()
@@ -360,10 +623,15 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             self.password = password
 
             self.loginInfoLabel.setText("Login Successful ✅")
-            # Enable the Request tab
+            # Enable the Request and Jobs tabs
             self.tabWidget.setTabEnabled(1, True)
+            self.tabWidget.setTabEnabled(2, True)
             # Optionally, switch to the Request tab automatically
             self.tabWidget.setCurrentIndex(1)
+
+            # Start monitoring jobs
+            self.start_jobs_monitoring()
+
         except Exception as e:
             self.loginInfoLabel.setText(f"Login failed: {e}")
             self.loginPushButton.setEnabled(True)
@@ -631,6 +899,13 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             self.worker.stop()
             self.thread.quit()
             self.thread.wait()  # Wait for the thread to finish
+
+        # Stop jobs monitoring
+        if self.jobs_thread and self.jobs_thread.isRunning():
+            self.jobs_worker.stop()
+            self.jobs_thread.quit()
+            self.jobs_thread.wait()
+
         event.accept()
 
     def cleanup_thread(self):
