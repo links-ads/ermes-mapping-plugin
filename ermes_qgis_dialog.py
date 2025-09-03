@@ -313,12 +313,8 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.jobs_timer = None
 
         # Setup for API
-        plugin_dir = os.path.dirname(__file__)
-        self.config_path = os.path.join(plugin_dir, "certs/config.json")
-        with open(self.config_path) as f:
-            self.config = json.load(f)
         self.active_time = None
-        self.api_base_url = self.config["api_base_url"]
+        self.api_base_url = "https://loki.linksfoundation.com/ermes-plugin"
         self.username = None  # Will be set when user logs in
         self.password = None  # Will be set when user logs in
         self.access_token = None  # Will be set after successful login
@@ -428,7 +424,6 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
 
         # Start the thread
         self.jobs_thread.start()
-        self.update_status("Started monitoring jobs...", "info")
 
     def update_jobs_table(self, jobs):
         """Update the jobs table with the latest jobs data"""
@@ -911,11 +906,18 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         formatted_message = f"[{timestamp}] {level.upper()}: {message}"
 
         self.status_messages.append(formatted_message)
-        self.textLogger.setText("\n".join(self.status_messages))
 
-        # Auto-scroll to the bottom
-        scrollbar = self.textLogger.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        # Only update the textLogger if it exists
+        try:
+            if self.textLogger is not None:
+                self.textLogger.setText("\n".join(self.status_messages))
+
+                # Auto-scroll to the bottom
+                scrollbar = self.textLogger.verticalScrollBar()
+                scrollbar.setValue(scrollbar.maximum())
+        except:
+            # textLogger doesn't exist, just continue without updating it
+            pass
 
         log_level = Qgis.Info
         if level == "error":
@@ -929,7 +931,6 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
 
     def closeEvent(self, event):
         """Ensure the thread is stopped when the dialog is closed."""
-        self.update_status("Closing...")
         if self.thread and self.thread.isRunning():
             self.worker.stop()
             self.thread.quit()
@@ -948,8 +949,6 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         Cleans up thread and worker references after the thread has finished.
         This slot is connected to the thread's finished signal.
         """
-        self.update_status("Job monitoring stopped.", "info")
-
         # Re-enable the button so the user can start another job
         self.requestPushButton.setEnabled(True)
 
