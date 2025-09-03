@@ -25,15 +25,14 @@
 
 import json
 import os
-import pika
 import requests
 from shapely.wkt import loads as wkt_loads
 from shapely.geometry import mapping
 import shutil
-import ssl
 import tempfile
-import uuid
 import zipfile
+import time
+from datetime import datetime
 
 from qgis.core import (
     QgsRasterLayer,
@@ -47,7 +46,6 @@ from qgis.core import (
 from qgis.PyQt import uic, QtWidgets
 from PyQt5.QtWidgets import QFileDialog
 from qgis.PyQt.QtCore import QObject, QThread, pyqtSignal, QDateTime
-from datetime import datetime
 
 
 def parse_date(date: str) -> str:
@@ -78,203 +76,157 @@ class MainWorker(QObject):
 
     def __init__(
         self,
-        broker_ca_file: str,
-        broker_cert_file: str,
-        broker_key_file: str,
-        user_id: str,
-        exchange: str,
-        host: str = "localhost",
-        port: int = 5672,
-        vhost: str = "/",
-        datalake_oauth_user: str = "",
-        datalake_oauth_password: str = "",
-        datalake_oauth_app_id: str = "",
-        datalake_oauth_api_key: str = "",
-        datalake_oauth_url: str = "",
+        api_base_url: str,
+        username: str,
+        password: str,
+        job_id: int,
     ):
         super().__init__()
-        self.ca_file = broker_ca_file
-        self.cert_file = broker_cert_file
-        self.key_file = broker_key_file
-        self.host = host
-        self.port = port
-        self.vhost = vhost
-        self.exchange = exchange
-        self.connection = None
-        self.channel = None
-        self.queue_name = f"qgis_user_{user_id}"
-        self.user_id = user_id
+        self.api_base_url = api_base_url
+        self.username = username
+        self.password = password
+        self.job_id = job_id
+        self.access_token = None
         self.is_running = True
-        self.oauth_user = datalake_oauth_user
-        self.oauth_password = datalake_oauth_password
-        self.oauth_app_id = datalake_oauth_app_id
-        self.oauth_api_key = datalake_oauth_api_key
-        self.auth_url = datalake_oauth_url
 
-        self.create_connection()
-
-    def create_connection(self):
+    def _authenticate(self):
         """
-        Establishes a connection to the RabbitMQ message broker
-        """
-        credentials = pika.credentials.ExternalCredentials()
-        ssl_options = self._get_tls_parameters()
-
-        connection_parameters = pika.ConnectionParameters(
-            credentials=credentials,
-            host=self.host,
-            port=self.port,
-            ssl_options=ssl_options,
-            virtual_host=self.vhost,
-        )
-
-        self.connection = pika.BlockingConnection(connection_parameters)
-        self.channel = self.connection.channel()
-
-    def _get_tls_parameters(self):
-        """
-        Gets the TLS parameters for the RabbitMQ connection
-
-        :returns: A pika.SSLOptions object.
-        """
-        context = ssl.create_default_context(cafile=self.ca_file)
-        context.verify_mode = ssl.CERT_REQUIRED
-        context.load_cert_chain(
-            certfile=self.cert_file,
-            keyfile=self.key_file,
-        )
-        return pika.SSLOptions(context, server_hostname=self.host)
-
-    def _check_connection(self):
-        """
-        Checks if the connection is valid and if not, creates a new connection.
-        """
-        if (
-            self.connection is None
-            or self.connection.is_closed
-            or self.channel.is_closed
-        ):
-            self.create_connection()
-
-    def _get_access(self):
-        """
-        Retrieves access tokens by authenticating with the OAuth service of DataLake
+        Authenticates with the API and gets an access token.
 
         :returns: A dictionary containing the Authorization header with the Bearer token.
         :raises HTTPError: If the authentication request fails.
         """
+        if self.access_token:
+            return {"Authorization": f"Bearer {self.access_token}"}
 
+        auth_url = f"{self.api_base_url}/auth/login"
         data = {
-            "loginId": self.oauth_user,
-            "password": self.oauth_password,
-            "applicationId": self.oauth_app_id,
-            "noJwt": "false",
+            "username": self.username,
+            "password": self.password,
         }
-        headers = {
-            "Authorization": self.oauth_api_key,
-            "Content-Type": "application/json",
-        }
-        response = requests.post(self.auth_url, json=data, headers=headers)
+
+        response = requests.post(auth_url, data=data)
         response.raise_for_status()
-        self.access_token = response.json()["token"]
-        self.refresh_token = response.json()["refreshToken"]
+
+        token_data = response.json()
+        self.access_token = token_data["access_token"]
         return {"Authorization": f"Bearer {self.access_token}"}
 
-    def _download_resource(self, url: str):
+    def _get_job_status(self):
         """
-        Downloads a resource from the given DataLake URL and saves it to a temporary cache path.
+        Gets the current status of the job.
 
-        :param url: The URL of the resource to be downloaded.
+        :returns: The job status response as a dictionary.
+        :raises HTTPError: If the request fails.
+        """
+        headers = self._authenticate()
+        status_url = f"{self.api_base_url}/jobs/{self.job_id}"
+
+        response = requests.get(status_url, headers=headers)
+        response.raise_for_status()
+
+        return response.json()
+
+    def _download_resource(self):
+        """
+        Downloads the resource for the current job using the /retrieve/{job_id} endpoint
+        and saves it to a temporary cache path.
+
         :return: The local cache path where the downloaded resource is saved.
         :raises HTTPError: If the HTTP request to the URL fails.
         """
+        retrieve_url = f"{self.api_base_url}/retrieve/{self.job_id}"
+        self.status_updated.emit(f"Downloading from {retrieve_url}")
+        headers = self._authenticate()
 
-        self.status_updated.emit(f"Downloading from {url}")
-        header = self._get_access()
-        cache_path = f"./tmp/{uuid.uuid4()}/{url.split('/')[-1]}"
-        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-
-        with requests.get(url, headers=header, stream=True) as response:
+        # Make the request to the retrieve endpoint
+        with requests.get(retrieve_url, headers=headers, stream=True) as response:
             response.raise_for_status()
+            # Try to get filename from Content-Disposition header, else fallback to job_id.zip
+            content_disp = response.headers.get("Content-Disposition", "")
+            filename = None
+            if "filename=" in content_disp:
+                filename = content_disp.split("filename=")[-1].strip('"; ')
+            if not filename:
+                # fallback: try to get from URL or use job_id.zip
+                filename = f"{self.job_id}.zip"
+
+            cache_dir = f"./tmp/{self.job_id}"
+            os.makedirs(cache_dir, exist_ok=True)
+            cache_path = os.path.join(cache_dir, filename)
+
             with open(cache_path, "wb") as f:
-                # Iterate over the response data in chunks
                 for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:  # Filter out keep-alive chunks
+                    if chunk:
                         f.write(chunk)
 
         return cache_path
 
     def run(self):
         """
-        Start consuming messages from the RabbitMQ queue.
+        Start polling the job status from the API.
 
-        This method will run indefinitely until an exception is raised or the plugin is closed.
+        This method will run indefinitely until the job is completed or an exception is raised.
         When the method finishes, the `finished` signal will be emitted.
 
-        :raises Exception: If an exception occurs while consuming messages.
+        :raises Exception: If an exception occurs while polling.
         """
         try:
-            self.status_updated.emit("Worker: Connecting to RabbitMQ")
-            self._check_connection()
-            self.channel.queue_declare(queue=self.queue_name, auto_delete=True)
-            self.status_updated.emit(f"Created queue {self.queue_name}")
+            self.status_updated.emit(f"Worker: Starting to monitor job {self.job_id}")
 
-            self.channel.queue_bind(
-                exchange=self.exchange,
-                queue=self.queue_name,
-                routing_key=f"test.status.orch.*.*.{self.user_id}.#",
-            )
-            self.status_updated.emit(
-                f"Worker: Listening on queue '{self.queue_name}'..."
-            )
-            self.channel.basic_consume(
-                queue=self.queue_name,
-                on_message_callback=self.message_callback,
-                auto_ack=True,
-            )
+            while self.is_running:
+                try:
+                    job_status = self._get_job_status()
+                    status = job_status["status"]
+                    result = job_status["result"]
+                    status_code = job_status["status_code"]
 
-            self.channel.start_consuming()
+                    if status == "end":
+                        # Job completed successfully
+                        if job_status.get("resource_url"):
+                            local_path = self._download_resource()
+                            self.status_updated.emit(
+                                f"Downloaded resource to {local_path}"
+                            )
+                            self.layer_ready.emit(local_path)
+                        else:
+                            self.error.emit(
+                                "Job completed but no resource URL provided"
+                            )
+                        break
+                    elif status == "error":
+                        # Job failed
+                        if (
+                            status_code == 404
+                        ):  # Minor hack for error given on missing images (will fix in pipeline)
+                            self.status_updated.emit(f"Job Warning: {result}")
+                            time.sleep(5)
+                        else:
+                            self.error.emit(f"Job Error: {status_code} - {result}")
+                            break
+                    elif status in ["pending", "start", "update"]:
+                        # Job is still running, wait before checking again
+                        self.status_updated.emit(
+                            f"Job {self.job_id} status: {status} - {result} "
+                        )
+                        time.sleep(5)  # Poll every 5 seconds
+                    else:
+                        self.error.emit(f"Unknown job status: {status}")
+                        break
+
+                except requests.exceptions.RequestException as e:
+                    self.error.emit(f"API request error: {e}")
+                    break
+
         except Exception as e:
             self.error.emit(f"Worker Error: {e}")
         finally:
             self.finished.emit()
 
-    def message_callback(self, ch, method, properties, body):
-        """
-        Callback function to process incoming messages from RabbitMQ.
-
-        This function is called when a message is received from the RabbitMQ queue.
-        It will attempt to parse the message as JSON and extract the URL of the resource
-        to download. If the message is of type "end" and contains a "urls" field, it will
-        attempt to download the resource from the first URL in the list and emit the
-        `layer_ready` signal with the local path of the downloaded file.
-
-        :param ch: Pika channel object
-        :param method: Pika method object
-        :param properties: Pika properties object
-        :param body: Message body as a bytes object
-        :raises Exception: If an exception occurs while processing the message
-        """
-        try:
-            self.status_updated.emit(f"Worker: Received message: {body}")
-            message = json.loads(body)
-
-            if message.get("type") == "end" and "urls" in message:
-                url = message["urls"]
-                self.status_updated.emit(
-                    f"Worker: 'ends' message received. Downloading from {url[0]}"
-                )
-                local_path = self._download_resource(url[0])
-                self.status_updated.emit(f"Worker: Downloaded to {local_path}")
-                self.layer_ready.emit(local_path)
-        except Exception as e:
-            self.error.emit(f"Download Error: {e}")
-
     def stop(self):
-        """Stops the consumer. Called when the plugin is closed."""
+        """Stops the worker. Called when the plugin is closed."""
         self.status_updated.emit("Worker: Stopping...")
-        if self.channel and self.channel.is_open:
-            self.channel.stop_consuming()
+        self.is_running = False
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -296,23 +248,16 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.thread = None
         self.worker = None
 
-        # Setup for RabbitMQ
+        # Setup for API
         plugin_dir = os.path.dirname(__file__)
-        self.ca_file = os.path.join(plugin_dir, "certs/ca_certificate.pem")
-        self.cert_file = os.path.join(plugin_dir, "certs/client_links_certificate.pem")
-        self.key_file = os.path.join(plugin_dir, "certs/client_links_key.pem")
         self.config_path = os.path.join(plugin_dir, "certs/config.json")
-        self.config = json.load(open(self.config_path))
+        with open(self.config_path) as f:
+            self.config = json.load(f)
         self.active_time = None
-        self.host = self.config["broker_host"]
-        self.port = self.config["broker_port"]
-        self.vhost = self.config["broker_vhost"]
-        self.exchange = self.config["broker_exchange"]
-        self.datalake_oauth_user = self.config["datalake_oauth_user"]
-        self.datalake_oauth_password = self.config["datalake_oauth_password"]
-        self.datalake_oauth_app_id = self.config["datalake_oauth_app_id"]
-        self.datalake_oauth_api_key = self.config["datalake_oauth_api_key"]
-        self.datalake_oauth_url = self.config["datalake_oauth_url"]
+        self.api_base_url = self.config["api_base_url"]
+        self.username = None  # Will be set when user logs in
+        self.password = None  # Will be set when user logs in
+        self.access_token = None  # Will be set after successful login
 
         # Available pipelines
         self.pipeline_map = {
@@ -324,9 +269,13 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             "Sentinel-1 image": "flood_satellite_image_sentinel_1",
         }
 
+        # UI: Disable Request tab until login is successful
+        # Assumes self.tabWidget is the QTabWidget containing the tabs
+        # and that tab 0 is Login, tab 1 is Request
+        self.tabWidget.setTabEnabled(1, False)
+
         # Connect UI signals to methods
         # Login
-        self.certificatesPushButton.clicked.connect(self.load_certificates)
         self.loginPushButton.clicked.connect(self.login)
         # Request
         self.startDateLineEdit.mousePressEvent = lambda _: self.move_calendar(
@@ -337,7 +286,6 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.endDateLineEdit.editingFinished.connect(self.update_dates)
         self.calendarWidget.clicked.connect(self.add_calendar_date)
 
-        self.requestPushButton.clicked.connect(self.start_listening)
         self.requestPushButton.clicked.connect(self.send_request)
 
     def move_calendar(self, active):
@@ -369,22 +317,64 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         else:
             self.endDateLineEdit.setText(calendar_time)
 
-    def load_certificates(self, *_):
-        folder = QFileDialog.getOpenFileName(self, "Select certificates file")
-        self.certificatesLineEdit.setText(folder[0])
-
     def login(self, *_):
-        if self.clientIdLineEdit.text():
-            self.clientIdLineEdit.setEnabled(False)
-            self.loginInfoLabel.setText("Login Successful✅")
+        """
+        Handles user login. Reads username and password from the UI,
+        sends them to the API, and if successful, enables the Request tab.
+        """
+        username = (
+            self.usernameLineEdit.text().strip()
+            if hasattr(self, "usernameLineEdit")
+            else ""
+        )
+        password = (
+            self.passwordLineEdit.text().strip()
+            if hasattr(self, "passwordLineEdit")
+            else ""
+        )
+
+        if not username or not password:
+            self.loginInfoLabel.setText("Please enter both username and password.")
+            return
+
+        self.loginPushButton.setEnabled(False)
+        self.loginInfoLabel.setText("Logging in...")
+
+        try:
+            auth_url = f"{self.api_base_url}/auth/login"
+            auth_data = {
+                "username": username,
+                "password": password,
+            }
+            response = requests.post(auth_url, data=auth_data)
+            response.raise_for_status()
+            token_data = response.json()
+            self.access_token = token_data.get("access_token")
+            if not self.access_token:
+                self.loginInfoLabel.setText("Login failed: No token received.")
+                self.loginPushButton.setEnabled(True)
+                return
+
+            # Save credentials for later use
+            self.username = username
+            self.password = password
+
+            self.loginInfoLabel.setText("Login Successful ✅")
+            # Enable the Request tab
+            self.tabWidget.setTabEnabled(1, True)
+            # Optionally, switch to the Request tab automatically
+            self.tabWidget.setCurrentIndex(1)
+        except Exception as e:
+            self.loginInfoLabel.setText(f"Login failed: {e}")
+            self.loginPushButton.setEnabled(True)
 
     def send_request(self):
         """
-        Sends a request to the RabbitMQ message broker with the selected parameters.
+        Sends a request to the API with the selected parameters.
 
         This function collects and validates the user inputs, constructs a message containing
         the selected polygon layer's geometry, the chosen pipeline, and the time range. It
-        then sends this message to a specific queue on the RabbitMQ.
+        then sends this message to the API.
 
         The process includes:
 
@@ -392,19 +382,23 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         - Constructing a unified geometry from all features in the layer.
         - Converting the geometry to WKT format and loading it as a Shapely polygon.
         - Constructing a message dictionary with the pipeline, geometry, and time range.
-        - Publishing the message to the RabbitMQ server.
+        - Publishing the message to the API.
 
         If any error occurs during this process, it updates the status with an error message.
 
         :raises Exception: If an error occurs during message sending or connection setup.
         """
 
+        # Check if logged in
+        if not self.access_token:
+            self.update_status("Error: Please login before making a request.", "error")
+            return
+
         # Retrieve user inputs
         selected_layer = self.mMapLayerComboBox.currentLayer()
         pipeline_text = self.layerTypeComboBox.currentText()
         start_dt = self.startDateLineEdit.text()
         end_dt = self.endDateLineEdit.text()
-        user_id = self.clientIdLineEdit.text()
 
         # Input validation
         if not isinstance(selected_layer, QgsVectorLayer):
@@ -426,83 +420,54 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         wkt_geometry = unified_qgs_geom.asWkt()
         shapely_polygon = wkt_loads(wkt_geometry)
 
-        if not all([user_id, selected_layer]):
+        if not all([selected_layer]):
             self.update_status("Error: All fields are required to send.", "error")
             return
 
         # Start Processing
         try:
-            self.update_status("Sending message...")
-            credentials = pika.credentials.ExternalCredentials()
-            context = ssl.create_default_context(cafile=self.ca_file)
-            context.verify_mode = ssl.CERT_REQUIRED
-            context.load_cert_chain(
-                certfile=self.cert_file,
-                keyfile=self.key_file,
-            )
-            ssl_options = pika.SSLOptions(context, server_hostname=self.host)
-            connection_parameters = pika.ConnectionParameters(
-                credentials=credentials,
-                host=self.host,
-                port=self.port,
-                ssl_options=ssl_options,
-                virtual_host=self.vhost,
-            )
+            self.update_status("Sending request to API...")
 
-            connection = pika.BlockingConnection(connection_parameters)
-            channel = connection.channel()
+            # Use the saved access token for authentication
+            headers = {"Authorization": f"Bearer {self.access_token}"}
 
-            message_dict = {
+            # Create job request
+            job_url = f"{self.api_base_url}/jobs/create"
+            job_data = {
                 "datatype_id": self.pipeline_map[pipeline_text],
                 "geometry": mapping(shapely_polygon),
-                "start": start_dt,
-                "end": end_dt,
+                "start_date": start_dt,
+                "end_date": end_dt,
             }
 
-            channel.basic_publish(
-                exchange=self.exchange,
-                routing_key=f"test.request.{user_id}",  # Route the message specifically to this user's queue
-                body=json.dumps(message_dict),
-                properties=pika.BasicProperties(
-                    delivery_mode=2,
-                    message_id=f"{user_id}.{str(uuid.uuid4())}",
-                    user_id="links",
-                ),
-            )
-            connection.close()
-            self.update_status(f"Message sent to user '{user_id}'.", "info")
+            job_response = requests.post(job_url, json=job_data, headers=headers)
+            job_response.raise_for_status()
+
+            job_result = job_response.json()
+            job_id = job_result["id"]
+
+            self.update_status(f"Job created with ID: {job_id}", "info")
+
+            # Start monitoring the job
+            self.start_listening(job_id)
+
         except Exception as e:
-            self.update_status(f"Error sending message: {e}", "error")
+            self.update_status(f"Error sending request: {e}", "error")
 
-    def start_listening(self):
-        """Set up the worker and thread to start listening for messages."""
+    def start_listening(self, job_id):
+        """Set up the worker and thread to start monitoring the job."""
         if self.thread is not None and self.thread.isRunning():
-            self.update_status("Already listening.", "warning")
-            return
-
-        user_id = self.clientIdLineEdit.text()
-
-        if not all([user_id]):
-            self.update_status("Error: Connection fields are required.", "error")
+            self.update_status("Already monitoring a job.", "warning")
             return
 
         # Create a QThread
         self.thread = QThread()
         # Create a worker
         self.worker = MainWorker(
-            broker_ca_file=self.ca_file,
-            broker_cert_file=self.cert_file,
-            broker_key_file=self.key_file,
-            user_id=user_id,
-            exchange=self.exchange,
-            host=self.host,
-            port=self.port,
-            vhost=self.vhost,
-            datalake_oauth_user=self.datalake_oauth_user,
-            datalake_oauth_password=self.datalake_oauth_password,
-            datalake_oauth_app_id=self.datalake_oauth_app_id,
-            datalake_oauth_api_key=self.datalake_oauth_api_key,
-            datalake_oauth_url=self.datalake_oauth_url,
+            api_base_url=self.api_base_url,
+            username=self.username,
+            password=self.password,
+            job_id=job_id,
         )
 
         # Move worker to the thread
@@ -526,7 +491,7 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
 
         # Disable button
         self.requestPushButton.setEnabled(False)
-        self.update_status("Listener started. Waiting for messages...", "info")
+        self.update_status(f"Started monitoring job {job_id}...", "info")
 
     def load_layer(self, file_path):
         """Loads the downloaded file into QGIS. This runs on the main thread."""
@@ -657,11 +622,11 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         elif level == "success":
             log_level = Qgis.Success
 
-        QgsMessageLog.logMessage(message, "RabbitMQ_Listener", level=log_level)
+        QgsMessageLog.logMessage(message, "Ermes_API", level=log_level)
 
     def closeEvent(self, event):
         """Ensure the thread is stopped when the dialog is closed."""
-        self.update_status("Closing dialog, stopping listener...")
+        self.update_status("Closing...")
         if self.thread and self.thread.isRunning():
             self.worker.stop()
             self.thread.quit()
@@ -673,9 +638,9 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         Cleans up thread and worker references after the thread has finished.
         This slot is connected to the thread's finished signal.
         """
-        self.update_status("Listener stopped.", "info")
+        self.update_status("Job monitoring stopped.", "info")
 
-        # Re-enable the button so the user can start another listener
+        # Re-enable the button so the user can start another job
         self.requestPushButton.setEnabled(True)
 
         # Set the Python references to None
@@ -687,19 +652,28 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         This function is called when QGIS is about to quit.
         It safely removes all temporary directories created during the session.
         """
-        self.update_status(
-            f"Cleaning up {len(self.temp_dirs_to_clean)} temporary directories...",
-            "info",
-        )
-        for dir_path in self.temp_dirs_to_clean:
-            try:
-                # shutil.rmtree can remove a directory and all its contents
-                shutil.rmtree(dir_path)
-            except Exception as e:
-                # Log an error but don't prevent QGIS from closing
-                print(f"Could not remove temporary directory {dir_path}: {e}")
-                self.update_status(
-                    f"Warning: Could not remove temp dir {dir_path}", "warning"
-                )
+        try:
+            self.update_status(
+                f"Cleaning up {len(self.temp_dirs_to_clean)} temporary directories...",
+                "info",
+            )
+            for dir_path in self.temp_dirs_to_clean:
+                try:
+                    # shutil.rmtree can remove a directory and all its contents
+                    shutil.rmtree(dir_path)
+                except Exception as e:
+                    # Log an error but don't prevent QGIS from closing
+                    print(f"Could not remove temporary directory {dir_path}: {e}")
+                    self.update_status(
+                        f"Warning: Could not remove temp dir {dir_path}", "warning"
+                    )
+
+            self.temp_dirs_to_clean.clear()
+        except Exception as e:
+            # Log an error but don't prevent QGIS from closing
+            print(f"Could not remove temporary directory {dir_path}: {e}")
+            self.update_status(
+                f"Warning: Could not remove temp dir {dir_path}", "warning"
+            )
 
         self.temp_dirs_to_clean.clear()
