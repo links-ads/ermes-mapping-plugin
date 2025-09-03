@@ -46,6 +46,7 @@ from qgis.core import (
 from qgis.PyQt import uic, QtWidgets
 from PyQt5.QtWidgets import QFileDialog, QTableWidgetItem, QHeaderView
 from qgis.PyQt.QtCore import QObject, QThread, pyqtSignal, QDateTime, QTimer
+from qgis.core import QgsMapLayerProxyModel
 
 # Store job data in the row for later use
 from PyQt5.QtCore import Qt
@@ -318,6 +319,8 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.username = None  # Will be set when user logs in
         self.password = None  # Will be set when user logs in
         self.access_token = None  # Will be set after successful login
+
+        self.mMapLayerComboBox.setFilters(QgsMapLayerProxyModel.PolygonLayer)
 
         # Available pipelines
         self.pipeline_map = {
