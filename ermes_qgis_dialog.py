@@ -23,7 +23,6 @@
 """
 
 
-import json
 import os
 import requests
 from shapely.wkt import loads as wkt_loads
@@ -44,8 +43,8 @@ from qgis.core import (
     QgsApplication,
 )
 from qgis.PyQt import uic, QtWidgets
-from PyQt5.QtWidgets import QFileDialog, QTableWidgetItem, QHeaderView
-from qgis.PyQt.QtCore import QObject, QThread, pyqtSignal, QDateTime, QTimer
+from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView
+from qgis.PyQt.QtCore import QObject, QThread, pyqtSignal
 from qgis.core import QgsMapLayerProxyModel
 
 # Store job data in the row for later use
@@ -128,7 +127,9 @@ class MainWorker(QObject):
     # Signals when Worker is finished, triggers clean-up and closes thread
     finished = pyqtSignal()
     # Signals when the layer is ready to be downloaded on Datalake
-    layer_ready = pyqtSignal(str)
+    layer_ready = pyqtSignal(
+        str, str
+    )  # Changed from str to str, str to accept both local_path and datatype_id
     # Used for INFO logging
     status_updated = pyqtSignal(str)
     # Used for ERROR logging
@@ -248,7 +249,9 @@ class MainWorker(QObject):
                             self.status_updated.emit(
                                 f"Downloaded resource to {local_path}"
                             )
-                            self.layer_ready.emit(local_path)
+                            # Emit also the datatype_id associated to the job
+                            datatype_id = job_status.get("body", {}).get("datatype_id")
+                            self.layer_ready.emit(local_path, datatype_id)
                         else:
                             self.error.emit(
                                 "Job completed but no resource URL provided"
@@ -330,6 +333,17 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             "Waterbody delineation": "flood_post_waterbody_delineation",
             "Sentinel-2 image": "fire_satellite_image_sentinel_2",
             "Sentinel-1 image": "flood_satellite_image_sentinel_1",
+        }
+
+        # Available styles
+        self.style_root = "styles"
+        self.style_map = {
+            "fire_burned_area_delineation": "fire_burned_area_delineation.qml",
+            "fire_burned_area_severity_estimation": "fire_burned_area_severity_estimation.qml",
+            "fire_active_flames_and_smoke_detection": "fire_active_flames_and_smoke_detection.qml",
+            "flood_post_waterbody_delineation": "flood_post_waterbody_delineation.qml",
+            "fire_satellite_image_sentinel_2": "fire_satellite_image_sentinel_2.qml",
+            "flood_satellite_image_sentinel_1": "flood_satellite_image_sentinel_1.qml",
         }
 
         # UI: Disable Request and Jobs tabs until login is successful
@@ -520,9 +534,19 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
     def download_job_resource(self, job_id):
         """Download a specific job resource and load it into QGIS"""
         try:
+            # First, get the job details to retrieve the datatype_id
+            job_url = f"{self.api_base_url}/jobs/{job_id}"
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+
+            job_response = requests.get(job_url, headers=headers)
+            job_response.raise_for_status()
+            job_data = job_response.json()
+
+            # Extract datatype_id from the job data
+            datatype_id = job_data.get("body", {}).get("datatype_id", None)
+
             # Use the same download logic as in MainWorker
             retrieve_url = f"{self.api_base_url}/retrieve/{job_id}"
-            headers = {"Authorization": f"Bearer {self.access_token}"}
 
             self.update_status(f"Downloading job {job_id}...", "info")
 
@@ -547,8 +571,8 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
                         if chunk:
                             f.write(chunk)
 
-                # Load the downloaded file into QGIS
-                self.load_layer(cache_path)
+                # Load the downloaded file into QGIS with datatype_id
+                self.load_layer(cache_path, datatype_id)
 
         except Exception as e:
             self.update_status(f"Error downloading job {job_id}: {e}", "error")
@@ -784,7 +808,7 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.requestPushButton.setEnabled(False)
         self.update_status(f"Started monitoring job {job_id}...", "info")
 
-    def load_layer(self, file_path):
+    def load_layer(self, file_path, datatype_id=None):
         """Loads the downloaded file into QGIS. This runs on the main thread."""
         self.update_status(
             f"Processing downloaded file: {os.path.basename(file_path)}", "info"
@@ -793,19 +817,19 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
 
         # --- HANDLE ZIP ARCHIVES ---
         if file_path.lower().endswith(".zip"):
-            self.handle_zip_file(file_path, layer_name)
+            self.handle_zip_file(file_path, layer_name, datatype_id)
         # --- HANDLE SINGLE TIF/TIFF FILES ---
         elif file_path.lower().endswith((".tif", ".tiff")):
-            self.handle_single_tif(file_path, layer_name)
-            # --- HANDLE UNSUPPORTED FILES ---
+            self.handle_single_tif(file_path, layer_name, datatype_id)
+        # --- HANDLE UNSUPPORTED FILES ---
         else:
             self.update_status(
                 f"Warning: File type not supported for auto-loading: {file_path}",
                 "warning",
             )
 
-    def handle_single_tif(self, file_path, layer_name):
-        """Loads a single TIF file as a QGIS layer."""
+    def handle_single_tif(self, file_path, layer_name, datatype_id=None):
+        """Loads a single TIF file as a QGIS layer and applies a style."""
         self.update_status(f"Loading raster layer: {layer_name}", "info")
         layer = QgsRasterLayer(file_path, layer_name)
 
@@ -815,12 +839,39 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             )
             return
 
+        # Apply style if datatype_id is available and in the style map
+        if datatype_id and datatype_id in self.style_map:
+            style_filename = self.style_map[datatype_id]
+            style_path = os.path.join(
+                os.path.dirname(__file__), self.style_root, style_filename
+            )
+
+            if os.path.exists(style_path):
+                loaded = layer.loadNamedStyle(style_path)
+                layer.triggerRepaint()
+                if loaded[0]:
+                    self.update_status(f"Applied style from {style_filename}", "info")
+                else:
+                    self.update_status(
+                        f"Applied style from {style_filename} (QGIS returned warning: {loaded[1]})",
+                        "info",
+                    )
+            else:
+                self.update_status(
+                    f"Warning: Style file not found: {style_path}", "warning"
+                )
+        else:
+            self.update_status(
+                "No style applied - datatype_id not available or not in style map.",
+                "info",
+            )
+
         QgsProject.instance().addMapLayer(layer)
         self.update_status(f"Successfully loaded {layer_name}", "success")
 
-    def handle_zip_file(self, zip_path, group_name):
+    def handle_zip_file(self, zip_path, group_name, datatype_id=None):
         """
-        Unzips an archive and loads all contained .tif files into a new layer group.
+        Unzips an archive and loads all contained .tif files into a new layer group, applying a style to each.
         """
         # Use a temporary directory that is automatically cleaned up
 
@@ -877,6 +928,14 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         # Create a new group in the layer tree. The group_name comes from layer_name.
         group = root.addGroup(group_name)
 
+        # Get style path if datatype_id is available and in the style map
+        style_path = None
+        if datatype_id and datatype_id in self.style_map:
+            style_filename = self.style_map[datatype_id]
+            style_path = os.path.join(
+                os.path.dirname(__file__), self.style_root, style_filename
+            )
+
         loaded_count = 0
         for tiff_path in tiff_files:
             # Use the tif's own filename as the layer name
@@ -888,6 +947,32 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
                     f"Skipping invalid raster: {individual_layer_name}", "warning"
                 )
                 continue
+
+            # Apply style if available
+            if style_path and os.path.exists(style_path):
+                loaded = layer.loadNamedStyle(style_path)
+                if loaded[0]:
+                    layer.triggerRepaint()
+                    self.update_status(
+                        f"Applied style to {individual_layer_name} from {os.path.basename(style_path)}",
+                        "info",
+                    )
+                else:
+                    self.update_status(
+                        f"Warning: Failed to apply style to {individual_layer_name} from {style_path}",
+                        "warning",
+                    )
+            else:
+                if datatype_id and datatype_id in self.style_map:
+                    self.update_status(
+                        f"Style file not found for {individual_layer_name}, loading without style.",
+                        "warning",
+                    )
+                else:
+                    self.update_status(
+                        f"No style applied to {individual_layer_name} - datatype_id not available or not in style map.",
+                        "info",
+                    )
 
             # Add the layer to the project's internal registry, but NOT to the legend yet (False).
             # This prevents it from appearing at the top level.
