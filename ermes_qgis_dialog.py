@@ -375,6 +375,7 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         # Jobs tab
         self.downloadJobButton.clicked.connect(self.download_selected_jobs)
         self.deleteJobButton.clicked.connect(self.delete_selected_jobs)
+        self.refreshJobsButton.clicked.connect(self.refresh_jobs_table)
 
     def setup_jobs_table(self):
         """Setup the jobs table with appropriate columns"""
@@ -597,6 +598,33 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         # 1. Call the API to delete the jobs
         # 2. Remove the rows from the table
         # 3. Update the jobs list
+
+    def refresh_jobs_table(self):
+        """Refreshes the jobs table by re-fetching jobs from the API."""
+        if not self.access_token:
+            self.update_status("Error: Please login before refreshing jobs.", "error")
+            return
+
+        self.update_status("Refreshing jobs table...", "info")
+
+        try:
+            # Call the API directly to get jobs
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            jobs_url = f"{self.api_base_url}/jobs/"
+
+            response = requests.get(jobs_url, headers=headers)
+            response.raise_for_status()
+
+            jobs = response.json()["jobs"]
+            self.update_jobs_table(jobs)
+            self.update_status(
+                f"Successfully refreshed jobs table with {len(jobs)} jobs.", "success"
+            )
+
+        except requests.exceptions.RequestException as e:
+            self.update_status(f"Failed to fetch jobs: {e}", "error")
+        except Exception as e:
+            self.update_status(f"Unexpected error refreshing jobs: {e}", "error")
 
     def move_calendar(self, active):
         """Moves calendar between the "start time" and "end time" line edit fields"""
