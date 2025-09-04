@@ -41,6 +41,7 @@ from qgis.core import (
     QgsGeometry,
     QgsVectorLayer,
     QgsApplication,
+    QgsWkbTypes,
 )
 from qgis.PyQt import uic, QtWidgets
 from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView
@@ -370,12 +371,20 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
         self.endDateLineEdit.editingFinished.connect(self.update_dates)
         self.calendarWidget.clicked.connect(self.add_calendar_date)
 
+        # Connect validation signals
+        self.startDateLineEdit.textChanged.connect(self.validate_form)
+        self.endDateLineEdit.textChanged.connect(self.validate_form)
+        self.mMapLayerComboBox.layerChanged.connect(self.validate_form)
+
         self.requestPushButton.clicked.connect(self.send_request)
 
         # Jobs tab
         self.downloadJobButton.clicked.connect(self.download_selected_jobs)
         self.deleteJobButton.clicked.connect(self.delete_selected_jobs)
         self.refreshJobsButton.clicked.connect(self.refresh_jobs_table)
+
+        # Initial validation
+        self.validate_form()
 
     def setup_jobs_table(self):
         """Setup the jobs table with appropriate columns"""
@@ -1102,3 +1111,50 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
             )
 
         self.temp_dirs_to_clean.clear()
+
+    def validate_form(self):
+        """Validates the form and enables/disables the request button accordingly"""
+        # Check if all required fields are filled
+        start_date = self.startDateLineEdit.text().strip()
+        end_date = self.endDateLineEdit.text().strip()
+        selected_layer = self.mMapLayerComboBox.currentLayer()
+
+        # Basic validation: all fields must be present
+        if not start_date or not end_date or not selected_layer:
+            self.requestPushButton.setEnabled(False)
+            return
+
+        # Validate date format and range
+        try:
+            start_parsed = parse_date(start_date)
+            end_parsed = parse_date(end_date)
+
+            if start_parsed is None or end_parsed is None:
+                self.requestPushButton.setEnabled(False)
+                return
+
+            if start_parsed and end_parsed and start_parsed > end_parsed:
+                self.requestPushButton.setEnabled(False)
+                return
+
+        except Exception:
+            self.requestPushButton.setEnabled(False)
+            return
+
+        # Validate that selected layer is a valid polygon layer with features
+        if not isinstance(selected_layer, QgsVectorLayer):
+            self.requestPushButton.setEnabled(False)
+            return
+
+        if selected_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+            self.requestPushButton.setEnabled(False)
+            return
+
+        # Check if layer has features
+        feature_count = selected_layer.featureCount()
+        if feature_count == 0:
+            self.requestPushButton.setEnabled(False)
+            return
+
+        # All validations passed, enable the button
+        self.requestPushButton.setEnabled(True)
