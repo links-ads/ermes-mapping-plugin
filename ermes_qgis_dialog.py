@@ -104,7 +104,8 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         self.password = None  # Will be set when user logs in
         self.access_token = None  # Will be set after successful login
 
-        self.mMapLayerComboBox.setFilters(QgsMapLayerProxyModel.PolygonLayer)
+        self.polygonLayerComboBox.setFilters(QgsMapLayerProxyModel.PolygonLayer)
+        self.rasterLayerComboBox.setFilters(QgsMapLayerProxyModel.RasterLayer)
 
         # Available pipelines
         self.pipeline_map = {
@@ -116,6 +117,11 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             "Sentinel-1 image": "flood_satellite_image_sentinel_1",
         }
 
+        # Available image types
+        self.image_type_map = {
+            "Sentinel-2 image": "sentinel_2",
+            "Sentinel-1 image": "sentinel_1",
+        }
         # Available styles
         self.style_root = "styles"
         self.style_map = {
@@ -129,9 +135,10 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         # UI: Disable Request and Jobs tabs until login is successful
         # Assumes self.tabWidget is the QTabWidget containing the tabs
-        # and that tab 0 is Login, tab 1 is Request, tab 2 is Jobs
+        # and that tab 0 is Login, tab 1 is Request, tab 2 is From Layer, tab 3 is Jobs
         self.tabWidget.setTabEnabled(1, False)
         self.tabWidget.setTabEnabled(2, False)
+        self.tabWidget.setTabEnabled(3, False)
 
         # Setup jobs table
         self.setup_jobs_table()
@@ -153,11 +160,22 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         self.calendarWidget.clicked.connect(self.add_calendar_date)
 
         # Connect validation signals
-        self.startDateLineEdit.textChanged.connect(self.validate_form)
-        self.endDateLineEdit.textChanged.connect(self.validate_form)
-        self.mMapLayerComboBox.layerChanged.connect(self.validate_form)
+        self.startDateLineEdit.textChanged.connect(self.validate_form_request)
+        self.endDateLineEdit.textChanged.connect(self.validate_form_request)
+        self.polygonLayerComboBox.layerChanged.connect(self.validate_form_request)
 
         self.requestPushButton.clicked.connect(self.send_request)
+
+        # From Layer
+        self.rasterLayerComboBox.layerChanged.connect(self.validate_form_from_layer)
+        self.imageTypeComboBox.currentTextChanged.connect(
+            self.update_requested_layer_options
+        )
+        self.imageTypeComboBox.currentTextChanged.connect(self.validate_form_from_layer)
+        self.requestedLayerComboBox.currentTextChanged.connect(
+            self.validate_form_from_layer
+        )
+        self.requestFilePushButton.clicked.connect(self.send_request_from_layer)
 
         # Jobs tab
         self.downloadJobButton.clicked.connect(self.download_selected_jobs)
@@ -165,7 +183,11 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         self.refreshJobsButton.clicked.connect(self.refresh_jobs_table)
 
         # Initial validation
-        self.validate_form()
+        self.validate_form_request()
+        self.validate_form_from_layer()
+
+        # Initialize requested layer options
+        self.update_requested_layer_options()
 
     def setup_jobs_table(self):
         """Setup the jobs table with appropriate columns"""
@@ -499,6 +521,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             # Enable the Request and Jobs tabs
             self.tabWidget.setTabEnabled(1, True)
             self.tabWidget.setTabEnabled(2, True)
+            self.tabWidget.setTabEnabled(3, True)
             # Optionally, switch to the Request tab automatically
             self.tabWidget.setCurrentIndex(1)
 
@@ -536,7 +559,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             return
 
         # Retrieve user inputs
-        selected_layer = self.mMapLayerComboBox.currentLayer()
+        selected_layer = self.polygonLayerComboBox.currentLayer()
         pipeline_text = self.layerTypeComboBox.currentText()
         start_dt = self.startDateLineEdit.text()
         end_dt = self.endDateLineEdit.text()
@@ -591,6 +614,78 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
             # Start monitoring the job
             self.start_listening(job_id)
+
+        except Exception as e:
+            self.update_status(f"Error sending request: {e}", "error")
+
+    def send_request_from_layer(self):
+        """Sends a request to the API with the selected parameters, uploading the raster file."""
+        if not self.access_token:
+            self.update_status("Error: Please login before making a request.", "error")
+            return
+
+        # Retrieve user inputs
+        selected_layer = self.rasterLayerComboBox.currentLayer()
+        image_type = self.imageTypeComboBox.currentText()
+        requested_layer = self.requestedLayerComboBox.currentText()
+
+        # Input validation
+        if not isinstance(selected_layer, QgsRasterLayer):
+            self.update_status("Error: Please select a valid raster layer.", "error")
+            return
+
+        # Get the file path of the raster layer
+        file_path = selected_layer.source()
+        if not file_path or not file_path.lower().endswith((".tif", ".tiff")):
+            self.update_status(
+                "Error: The selected raster layer must be a TIFF file.", "error"
+            )
+            return
+
+        # Start Processing
+        try:
+            self.update_status("Sending request to API...")
+
+            # Use the saved access token for authentication
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+
+            # Prepare the API endpoint and parameters
+            job_url = f"{self.api_base_url}/jobs/create/from_file"
+            params = {
+                "datatype_id": self.pipeline_map[requested_layer],
+                "image_type": self.image_type_map[image_type],
+            }
+
+            # Open the raster file for upload
+            with open(file_path, "rb") as f:
+                files = {
+                    "file": (os.path.basename(file_path), f, "image/tiff"),
+                }
+                response = requests.post(
+                    job_url, headers=headers, params=params, files=files
+                )
+                response.raise_for_status()
+
+            # If the API returns a file (StreamingResponse), save it to a temp file and load it
+            content_type = response.headers.get("Content-Type", "")
+            if "image/tiff" in content_type or "image/tif" in content_type:
+                import tempfile
+
+                temp_tiff = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
+                temp_tiff.write(response.content)
+                temp_tiff.close()
+                self.update_status(
+                    "Received result TIFF from API. Loading into QGIS...", "success"
+                )
+                self.load_layer(temp_tiff.name, self.pipeline_map[requested_layer])
+            else:
+                # If the API returns JSON (e.g., error), show the message
+                try:
+                    error_json = response.json()
+                    error_msg = error_json.get("detail", str(error_json))
+                except Exception:
+                    error_msg = response.text
+                self.update_status(f"API Error: {error_msg}", "error")
 
         except Exception as e:
             self.update_status(f"Error sending request: {e}", "error")
@@ -815,6 +910,13 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                 # Auto-scroll to the bottom
                 scrollbar = self.textLogger.verticalScrollBar()
                 scrollbar.setValue(scrollbar.maximum())
+
+            if self.textLogger2 is not None:
+                self.textLogger2.setText("\n".join(self.status_messages))
+
+                # Auto-scroll to the bottom
+                scrollbar = self.textLogger2.verticalScrollBar()
+                scrollbar.setValue(scrollbar.maximum())
         except:
             # textLogger doesn't exist, just continue without updating it
             pass
@@ -840,19 +942,15 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                     # Auto-scroll to the bottom
                     scrollbar = self.textLogger.verticalScrollBar()
                     scrollbar.setValue(scrollbar.maximum())
+                if self.textLogger2 is not None:
+                    self.textLogger2.setText("\n".join(self.status_messages))
+
+                    # Auto-scroll to the bottom
+                    scrollbar = self.textLogger2.verticalScrollBar()
+                    scrollbar.setValue(scrollbar.maximum())
             except:
                 # textLogger doesn't exist, just continue without updating it
                 pass
-
-        log_level = Qgis.Info
-        if level == "error":
-            log_level = Qgis.Critical
-        elif level == "warning":
-            log_level = Qgis.Warning
-        elif level == "success":
-            log_level = Qgis.Success
-
-        QgsMessageLog.logMessage(message, "Ermes_API", level=log_level)
 
     def closeEvent(self, event):
         """Ensure the thread is stopped when the dialog is closed."""
@@ -915,12 +1013,12 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         self.temp_dirs_to_clean.clear()
 
-    def validate_form(self):
+    def validate_form_request(self):
         """Validates the form and enables/disables the request button accordingly"""
         # Check if all required fields are filled
         start_date = self.startDateLineEdit.text().strip()
         end_date = self.endDateLineEdit.text().strip()
-        selected_layer = self.mMapLayerComboBox.currentLayer()
+        selected_layer = self.polygonLayerComboBox.currentLayer()
 
         # Basic validation: all fields must be present
         if not start_date or not end_date or not selected_layer:
@@ -961,3 +1059,52 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         # All validations passed, enable the button
         self.requestPushButton.setEnabled(True)
+
+    def validate_form_from_layer(self):
+        """Validates the form and enables/disables the request button accordingly"""
+        selected_layer = self.rasterLayerComboBox.currentLayer()
+        image_type = self.imageTypeComboBox.currentText()
+        requested_layer = self.requestedLayerComboBox.currentText()
+
+        # Check if all required fields are filled
+        if not selected_layer or not image_type or not requested_layer:
+            self.requestFilePushButton.setEnabled(False)
+            return
+
+        # Additional validation can be added here if needed
+        self.requestFilePushButton.setEnabled(True)
+
+    def update_requested_layer_options(self):
+        """Updates the requestedLayerComboBox options based on imageTypeComboBox selection"""
+        image_type = self.imageTypeComboBox.currentText()
+
+        # Clear current options
+        self.requestedLayerComboBox.clear()
+
+        # Disable the combo box if no image type is selected
+        if not image_type:
+            self.requestedLayerComboBox.setEnabled(False)
+            return
+
+        # Enable the combo box
+        self.requestedLayerComboBox.setEnabled(True)
+
+        # Set options based on image type
+        if image_type == "Sentinel-2 image":
+            self.requestedLayerComboBox.addItems(
+                ["Burned area delineation", "Burn Severity estimation"]
+            )
+        elif image_type == "Sentinel-1 image":
+            self.requestedLayerComboBox.addItems(["Waterbody delineation"])
+        else:
+            # For other image types, show all options
+            self.requestedLayerComboBox.addItems(
+                [
+                    "Burned area delineation",
+                    "Burn Severity estimation",
+                    "Active Flames and Smoke detection",
+                    "Waterbody delineation",
+                    "Sentinel-1 image",
+                    "Sentinel-2 image",
+                ]
+            )
