@@ -15,6 +15,7 @@ class MainWorker(QObject):
     )  # Changed from str to str, str to accept both local_path and datatype_id
     # Used for INFO logging
     status_updated = pyqtSignal(str)
+    log_separator = pyqtSignal()
     # Used for ERROR logging
     error = pyqtSignal(str)
 
@@ -80,7 +81,9 @@ class MainWorker(QObject):
         :raises HTTPError: If the HTTP request to the URL fails.
         """
         retrieve_url = f"{self.api_base_url}/retrieve/{self.job_id}"
-        self.status_updated.emit(f"Downloading from {retrieve_url}")
+        self.status_updated.emit(
+            f"Job {self.job_id} status: success - Request completed, downloading layer"
+        )
         headers = self._authenticate()
 
         # Make the request to the retrieve endpoint
@@ -129,9 +132,6 @@ class MainWorker(QObject):
                         # Job completed successfully
                         if job_status.get("resource_url"):
                             local_path = self._download_resource()
-                            self.status_updated.emit(
-                                f"Downloaded resource to {local_path}"
-                            )
                             # Emit also the datatype_id associated to the job
                             datatype_id = job_status.get("body", {}).get("datatype_id")
                             self.layer_ready.emit(local_path, datatype_id)
@@ -149,19 +149,22 @@ class MainWorker(QObject):
                             time.sleep(5)
                         else:
                             self.error.emit(f"Job Error: {status_code} - {result}")
+                            self.log_separator.emit()
                             break
                     elif status in ["pending", "start", "update"]:
                         # Job is still running, wait before checking again
                         self.status_updated.emit(
                             f"Job {self.job_id} status: {status} - {result} "
                         )
-                        time.sleep(5)  # Poll every 5 seconds
+                        time.sleep(1)  # Poll every 5 seconds
                     else:
                         self.error.emit(f"Unknown job status: {status}")
+                        self.log_separator.emit()
                         break
 
                 except requests.exceptions.RequestException as e:
                     self.error.emit(f"API request error: {e}")
+                    self.log_separator.emit()
                     break
 
         except Exception as e:

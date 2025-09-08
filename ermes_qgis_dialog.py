@@ -138,6 +138,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         # Initialize status messages list
         self.status_messages = []
+        self._cached_messages = []
 
         # Connect UI signals to methods
         # Login
@@ -585,7 +586,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
             job_result = job_response.json()
             job_id = job_result["id"]
-
+            self.add_log_separator()
             self.update_status(f"Job created with ID: {job_id}", "info")
 
             # Start monitoring the job
@@ -624,6 +625,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         self.worker.layer_ready.connect(self.load_layer)
         self.worker.status_updated.connect(self.update_status)
+        self.worker.log_separator.connect(self.add_log_separator)
         self.worker.error.connect(lambda msg: self.update_status(msg, "error"))
 
         # Start the thread
@@ -636,7 +638,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
     def load_layer(self, file_path, datatype_id=None):
         """Loads the downloaded file into QGIS. This runs on the main thread."""
         self.update_status(
-            f"Processing downloaded file: {os.path.basename(file_path)}", "info"
+            f"Loading retrieved layer: {os.path.basename(file_path)}", "info"
         )
         layer_name = os.path.splitext(os.path.basename(file_path))[0]
 
@@ -693,6 +695,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         QgsProject.instance().addMapLayer(layer)
         self.update_status(f"Successfully loaded {layer_name}", "success")
+        self.add_log_separator()
 
     def handle_zip_file(self, zip_path, group_name, datatype_id=None):
         """
@@ -703,20 +706,12 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         extract_dir = tempfile.mkdtemp(prefix="qgis_ermes_")
         self.temp_dirs_to_clean.append(extract_dir)
 
-        self.update_status(
-            f"Unzipping '{os.path.basename(zip_path)}' to a temporary location...",
-            "info",
-        )
-
         try:
             # Extract the zip file
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_dir)
             try:
                 os.remove(zip_path)
-                self.update_status(
-                    f"Removed original archive: {os.path.basename(zip_path)}", "info"
-                )
             except OSError as e:
                 self.update_status(
                     f"Warning: Could not remove original zip file {zip_path}: {e}",
@@ -783,10 +778,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                         "info",
                     )
                 else:
-                    self.update_status(
-                        f"Warning: Failed to apply style to {individual_layer_name} from {style_path}",
-                        "warning",
-                    )
+                    pass
             else:
                 if datatype_id and datatype_id in self.style_map:
                     self.update_status(
@@ -811,16 +803,11 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             f"Successfully loaded {loaded_count} layer(s) into group '{group_name}'.",
             "success",
         )
+        self.add_log_separator()
 
-    def update_status(self, message, level="info"):
-        """Updates the status label and logs to QGIS log."""
-        # Add timestamp and format the message
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        formatted_message = f"[{timestamp}] {level.upper()}: {message}"
-
-        self.status_messages.append(formatted_message)
-
-        # Only update the textLogger if it exists
+    def add_log_separator(self):
+        """Adds a separator to the log."""
+        self.status_messages.append("========================================")
         try:
             if self.textLogger is not None:
                 self.textLogger.setText("\n".join(self.status_messages))
@@ -831,6 +818,31 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         except:
             # textLogger doesn't exist, just continue without updating it
             pass
+
+    def update_status(self, message, level="info"):
+        """Updates the status label and logs to QGIS log."""
+        # Add timestamp and format the message
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_message = f"{level.upper()}: {message}"
+        formatted_message_with_timestamp = f"[{timestamp}] {formatted_message}"
+
+        # Check for duplicate: identical level and message (ignoring timestamp)
+
+        if formatted_message not in self._cached_messages:
+            self._cached_messages.append(formatted_message)
+            self.status_messages.append(formatted_message_with_timestamp)
+
+            # Only update the textLogger if it exists
+            try:
+                if self.textLogger is not None:
+                    self.textLogger.setText("\n".join(self.status_messages))
+
+                    # Auto-scroll to the bottom
+                    scrollbar = self.textLogger.verticalScrollBar()
+                    scrollbar.setValue(scrollbar.maximum())
+            except:
+                # textLogger doesn't exist, just continue without updating it
+                pass
 
         log_level = Qgis.Info
         if level == "error":
