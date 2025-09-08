@@ -54,6 +54,10 @@ from PyQt5.QtCore import Qt
 from .workers.job import JobsWorker
 from .workers.main import MainWorker
 
+import warnings
+
+warnings.filterwarnings("ignore")
+
 
 def parse_date(date: str) -> str:
     """If a date string is set it parses it into a format YYYY-MM-DD. In case parsing fails None is returned.
@@ -74,7 +78,7 @@ FORM_CLASS, _ = uic.loadUiType(
 )
 
 
-class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
+class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
     def __init__(self, parent=None):
 
         super(ErmesQGISDialog, self).__init__(parent)
@@ -840,16 +844,19 @@ class ErmesQGISDialog(QtWidgets.QDockWidget, FORM_CLASS):
 
     def closeEvent(self, event):
         """Ensure the thread is stopped when the dialog is closed."""
-        if self.thread and self.thread.isRunning():
-            self.worker.stop()
-            self.thread.quit()
-            self.thread.wait()  # Wait for the thread to finish
+        try:
+            if self.thread and self.thread.isRunning():
+                self.worker.stop()
+                self.thread.quit()
+                self.thread.wait()  # Wait for the thread to finish
 
-        # Stop jobs monitoring
-        if self.jobs_thread and self.jobs_thread.isRunning():
-            self.jobs_worker.stop()
-            self.jobs_thread.quit()
-            self.jobs_thread.wait()
+            # Stop jobs monitoring
+            if self.jobs_thread and self.jobs_thread.isRunning():
+                self.jobs_worker.stop()
+                self.jobs_thread.quit()
+                self.jobs_thread.wait()
+        except:
+            pass
 
         event.accept()
 
