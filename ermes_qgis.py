@@ -161,7 +161,7 @@ class ErmesQGIS:
         icon_path = ":/plugins/ermes_qgis/icon.png"
         self.add_action(
             icon_path,
-            text=self.tr("Output layer info to a text file"),
+            text=self.tr("Map flood and wildfire events"),
             callback=self.run,
             parent=self.iface.mainWindow(),
         )
