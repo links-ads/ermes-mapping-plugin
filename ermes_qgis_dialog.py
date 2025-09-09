@@ -320,7 +320,9 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                         non_downloadable_jobs.append(job_id)
 
             except Exception as e:
-                self.update_status(f"Error processing job from row {row}: {e}", "error")
+                self.update_status(
+                    f"Internal error processing job from row {row}", "error"
+                )
 
         # Show warning for non-downloadable jobs
         if non_downloadable_jobs:
@@ -342,7 +344,9 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                 # Download the job resource
                 self.download_job_resource(job_id)
             except Exception as e:
-                self.update_status(f"Error downloading job {job_id}: {e}", "error")
+                self.update_status(
+                    f"Internal error downloading resource for job {job_id}", "error"
+                )
 
     def download_job_resource(self, job_id):
         """Download a specific job resource and load it into QGIS"""
@@ -388,7 +392,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                 self.load_layer(cache_path, datatype_id)
 
         except Exception as e:
-            self.update_status(f"Error downloading job {job_id}: {e}", "error")
+            self.update_status(f"Internal error downloading job {job_id}", "error")
 
     def delete_selected_jobs(self):
         """Mock delete functionality for selected jobs"""
@@ -434,9 +438,9 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             )
 
         except requests.exceptions.RequestException as e:
-            self.update_status(f"Failed to fetch jobs: {e}", "error")
+            self.update_status(f"Failed to fetch jobs to refresh jobs table", "error")
         except Exception as e:
-            self.update_status(f"Unexpected error refreshing jobs: {e}", "error")
+            self.update_status(f"Internal error refreshing jobs table", "error")
 
     def move_calendar(self, active):
         """Moves calendar between the "start time" and "end time" line edit fields"""
@@ -528,8 +532,46 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             # Start monitoring jobs
             self.start_jobs_monitoring()
 
+        except requests.HTTPError as http_err:
+            if http_err.response is not None:
+                status_code = http_err.response.status_code
+                try:
+                    error_json = http_err.response.json()
+                    error_detail = error_json.get("detail", str(error_json))
+                except Exception:
+                    error_detail = http_err.response.text
+
+                if status_code == 401:
+                    self.loginInfoLabel.setText(
+                        "Login failed: Unauthorized (401). Please check your username and password."
+                    )
+                elif status_code == 403:
+                    self.loginInfoLabel.setText(
+                        "Login failed: Forbidden (403). You do not have access."
+                    )
+                elif status_code == 500:
+                    self.loginInfoLabel.setText(
+                        "Login failed: Server error (500). Please try again later."
+                    )
+                else:
+                    self.loginInfoLabel.setText(
+                        f"Login failed ({status_code}): {error_detail}"
+                    )
+            else:
+                self.loginInfoLabel.setText("Login failed: HTTP error occurred.")
+            self.loginPushButton.setEnabled(True)
+        except requests.ConnectionError:
+            self.loginInfoLabel.setText(
+                "Login failed: Unable to connect to server. Please check your network connection."
+            )
+            self.loginPushButton.setEnabled(True)
+        except requests.Timeout:
+            self.loginInfoLabel.setText(
+                "Login failed: Request timed out. Please try again."
+            )
+            self.loginPushButton.setEnabled(True)
         except Exception as e:
-            self.loginInfoLabel.setText(f"Login failed: {e}")
+            self.loginInfoLabel.setText(f"Login failed: Internal error")
             self.loginPushButton.setEnabled(True)
 
     def send_request(self):
@@ -616,7 +658,9 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             self.start_listening(job_id)
 
         except Exception as e:
-            self.update_status(f"Error sending request: {e}", "error")
+            self.update_status(
+                f"Internal error sending request: not available", "error"
+            )
 
     def send_request_from_layer(self):
         """Sends a request to the API with the selected parameters, uploading the raster file."""
@@ -685,10 +729,12 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                     error_msg = error_json.get("detail", str(error_json))
                 except Exception:
                     error_msg = response.text
-                self.update_status(f"API Error: {error_msg}", "error")
+                self.update_status(
+                    f"Internal error sending request from layer", "error"
+                )
 
         except Exception as e:
-            self.update_status(f"Error sending request: {e}", "error")
+            self.update_status(f"Internal error sending request from layer", "error")
 
     def start_listening(self, job_id):
         """Set up the worker and thread to start monitoring the job."""
@@ -809,17 +855,17 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                 os.remove(zip_path)
             except OSError as e:
                 self.update_status(
-                    f"Warning: Could not remove original zip file {zip_path}: {e}",
+                    f"Warning: Could not remove original zip file at location{zip_path}",
                     "warning",
                 )
         except zipfile.BadZipFile:
             self.update_status(
-                f"Error: '{os.path.basename(zip_path)}' is not a valid zip file.",
+                f"Error: '{os.path.basename(zip_path)}' is not a valid zip file",
                 "error",
             )
             return
         except Exception as e:
-            self.update_status(f"Error extracting zip file: {e}", "error")
+            self.update_status(f"Error extracting zip file", "error")
             return
 
         # Scan the extracted directory for .tif files
@@ -831,7 +877,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         if not tiff_files:
             self.update_status(
-                f"No .tif files were found inside '{os.path.basename(zip_path)}'.",
+                f"No .tif files were found inside '{os.path.basename(zip_path)}'",
                 "warning",
             )
             return
@@ -859,7 +905,8 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             layer = QgsRasterLayer(tiff_path, individual_layer_name)
             if not layer.isValid():
                 self.update_status(
-                    f"Skipping invalid raster: {individual_layer_name}", "warning"
+                    f"Skipping invalid raster: {individual_layer_name}",
+                    "warning",
                 )
                 continue
 
@@ -877,12 +924,12 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             else:
                 if datatype_id and datatype_id in self.style_map:
                     self.update_status(
-                        f"Style file not found for {individual_layer_name}, loading without style.",
+                        f"Style file not found for {individual_layer_name}, loading without style",
                         "warning",
                     )
                 else:
                     self.update_status(
-                        f"No style applied to {individual_layer_name} - datatype_id not available or not in style map.",
+                        f"No style applied to {individual_layer_name} - datatype_id not available or not in style map",
                         "info",
                     )
 
@@ -895,7 +942,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             loaded_count += 1
 
         self.update_status(
-            f"Successfully loaded {loaded_count} layer(s) into group '{group_name}'.",
+            f"Successfully loaded {loaded_count} layer(s) into group '{group_name}'",
             "success",
         )
         self.add_log_separator()
@@ -989,7 +1036,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         """
         try:
             self.update_status(
-                f"Cleaning up {len(self.temp_dirs_to_clean)} temporary directories...",
+                f"Cleaning up {len(self.temp_dirs_to_clean)} temporary directories",
                 "info",
             )
             for dir_path in self.temp_dirs_to_clean:
@@ -998,17 +1045,18 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                     shutil.rmtree(dir_path)
                 except Exception as e:
                     # Log an error but don't prevent QGIS from closing
-                    print(f"Could not remove temporary directory {dir_path}: {e}")
+                    print(f"Could not remove temporary directory {dir_path}")
                     self.update_status(
-                        f"Warning: Could not remove temp dir {dir_path}", "warning"
+                        f"Warning: Could not remove temp dir at location {dir_path}",
+                        "warning",
                     )
 
             self.temp_dirs_to_clean.clear()
         except Exception as e:
             # Log an error but don't prevent QGIS from closing
-            print(f"Could not remove temporary directory {dir_path}: {e}")
+            print(f"Could not remove temporary directory {dir_path}")
             self.update_status(
-                f"Warning: Could not remove temp dir {dir_path}", "warning"
+                f"Warning: Could not remove temp dir at location {dir_path}", "warning"
             )
 
         self.temp_dirs_to_clean.clear()

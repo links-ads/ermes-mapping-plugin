@@ -38,7 +38,7 @@
          </sizepolicy>
         </property>
         <property name="currentIndex">
-         <number>2</number>
+         <number>0</number>
         </property>
         <widget class="QWidget" name="loginTab">
          <property name="mouseTracking">
@@ -136,17 +136,22 @@
                 </property>
                </spacer>
               </item>
-              <item row="14" column="3">
+              <item row="13" column="3">
                <widget class="QPushButton" name="loginPushButton">
+                <property name="minimumSize">
+                 <size>
+                  <width>100</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <property name="maximumSize">
+                 <size>
+                  <width>100</width>
+                  <height>16777215</height>
+                 </size>
+                </property>
                 <property name="text">
                  <string>Login</string>
-                </property>
-               </widget>
-              </item>
-              <item row="13" column="2">
-               <widget class="QLabel" name="passwordLabel">
-                <property name="text">
-                 <string>Password</string>
                 </property>
                </widget>
               </item>
@@ -186,25 +191,6 @@
                 </property>
                </spacer>
               </item>
-              <item row="13" column="3">
-               <widget class="QLineEdit" name="passwordLineEdit">
-                <property name="minimumSize">
-                 <size>
-                  <width>350</width>
-                  <height>0</height>
-                 </size>
-                </property>
-                <property name="maximumSize">
-                 <size>
-                  <width>350</width>
-                  <height>25</height>
-                 </size>
-                </property>
-                <property name="echoMode">
-                 <enum>QLineEdit::Password</enum>
-                </property>
-               </widget>
-              </item>
               <item row="16" column="4">
                <spacer name="mainLoginVerticalSpacer">
                 <property name="orientation">
@@ -225,6 +211,32 @@
                <widget class="QLabel" name="loginInfoLabel">
                 <property name="text">
                  <string>Enter your Username and Password to Login</string>
+                </property>
+               </widget>
+              </item>
+              <item row="11" column="3">
+               <widget class="QLineEdit" name="passwordLineEdit">
+                <property name="minimumSize">
+                 <size>
+                  <width>350</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <property name="maximumSize">
+                 <size>
+                  <width>350</width>
+                  <height>25</height>
+                 </size>
+                </property>
+                <property name="echoMode">
+                 <enum>QLineEdit::Password</enum>
+                </property>
+               </widget>
+              </item>
+              <item row="11" column="2">
+               <widget class="QLabel" name="passwordLabel">
+                <property name="text">
+                 <string>Password</string>
                 </property>
                </widget>
               </item>
@@ -1131,27 +1143,21 @@
          <attribute name="title">
           <string>From Layer</string>
          </attribute>
-         <layout class="QGridLayout" name="fromLayerGridLayout">
-          <property name="leftMargin">
-           <number>5</number>
+         <widget class="QScrollArea" name="fromLayerScrollArea">
+          <property name="geometry">
+           <rect>
+            <x>10</x>
+            <y>10</y>
+            <width>841</width>
+            <height>581</height>
+           </rect>
           </property>
-          <property name="topMargin">
-           <number>5</number>
+          <property name="sizePolicy">
+           <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+           </sizepolicy>
           </property>
-          <property name="rightMargin">
-           <number>5</number>
-          </property>
-          <property name="bottomMargin">
-           <number>5</number>
-          </property>
-          <item row="0" column="0">
-           <widget class="QScrollArea" name="fromLayerScrollArea">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-              <horstretch>0</horstretch>
-              <verstretch>0</verstretch>
-             </sizepolicy>
-            </property>
           <property name="verticalScrollBarPolicy">
            <enum>Qt::ScrollBarAsNeeded</enum>
           </property>
@@ -1367,8 +1373,6 @@
            </layout>
           </widget>
          </widget>
-          </item>
-         </layout>
         </widget>
         <widget class="QWidget" name="jobsTab">
          <attribute name="title">
