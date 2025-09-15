@@ -51,9 +51,14 @@ from .workers.job import JobsWorker
 from .workers.main import MainWorker
 from .workers.token_manager import TokenManager
 
+# Import the BoundingBoxWidget
+from .widgets.bbox_widget import RectangleMapTool
+
 import warnings
 
 warnings.filterwarnings("ignore")
+base_path = os.path.dirname(os.path.abspath(__file__))
+thumbnail_image = os.path.join(base_path, "images", "title.png")
 
 
 def parse_date(date: str) -> str:
@@ -109,6 +114,11 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         self.polygonLayerComboBox.setFilters(QgsMapLayerProxyModel.PolygonLayer)
         self.rasterLayerComboBox.setFilters(QgsMapLayerProxyModel.RasterLayer)
+
+        # Initialize BoundingBoxWidget
+        self.bboxWidget = None
+        self.rectangleMapTool = None
+        self.current_bbox = None  # Store current bounding box coordinates
 
         # Available pipelines
         self.pipeline_map = {
@@ -167,6 +177,10 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         self.endDateLineEdit.textChanged.connect(self.validate_form_request)
         self.polygonLayerComboBox.layerChanged.connect(self.validate_form_request)
 
+        # Connect radio button signals for AOI method selection
+        self.drawRectangleRadioButton.toggled.connect(self.on_aoi_method_changed)
+        self.selectPolygonRadioButton.toggled.connect(self.on_aoi_method_changed)
+
         self.requestPushButton.clicked.connect(self.send_request)
 
         # From Layer
@@ -191,6 +205,9 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         # Initialize requested layer options
         self.update_requested_layer_options()
+
+        # Initialize AOI method
+        self.on_aoi_method_changed()
 
     def setup_jobs_table(self):
         """Setup the jobs table with appropriate columns"""
@@ -621,27 +638,45 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             return
 
         # Retrieve user inputs
-        selected_layer = self.polygonLayerComboBox.currentLayer()
         pipeline_text = self.layerTypeComboBox.currentText()
         start_dt = self.startDateLineEdit.text()
         end_dt = self.endDateLineEdit.text()
 
-        # Input validation
-        if not isinstance(selected_layer, QgsVectorLayer):
-            self.update_status("Error: Please select a valid polygon layer.", "error")
-            return
+        # Get geometry based on AOI method
+        if self.drawRectangleRadioButton.isChecked():
+            # Use drawn rectangle
+            if not self.current_bbox:
+                self.update_status("Error: Please draw a rectangle first.", "error")
+                return
 
-        all_geoms = [feature.geometry() for feature in selected_layer.getFeatures()]
-        if not all_geoms:
-            self.update_status("Error: The selected layer has no features.", "error")
-            return
+            # Create geometry from bbox coordinates
+            minx, miny, maxx, maxy = self.current_bbox
+            from qgis.core import QgsGeometry, QgsRectangle
 
-        unified_qgs_geom = QgsGeometry.unaryUnion(all_geoms)
-        if unified_qgs_geom.isEmpty():
-            self.update_status(
-                "Error: Could not create a valid geometry from the layer.", "error"
-            )
-            return
+            rect = QgsRectangle(minx, miny, maxx, maxy)
+            unified_qgs_geom = QgsGeometry.fromRect(rect)
+        else:
+            # Use selected polygon layer
+            selected_layer = self.polygonLayerComboBox.currentLayer()
+            if not isinstance(selected_layer, QgsVectorLayer):
+                self.update_status(
+                    "Error: Please select a valid polygon layer.", "error"
+                )
+                return
+
+            all_geoms = [feature.geometry() for feature in selected_layer.getFeatures()]
+            if not all_geoms:
+                self.update_status(
+                    "Error: The selected layer has no features.", "error"
+                )
+                return
+
+            unified_qgs_geom = QgsGeometry.unaryUnion(all_geoms)
+            if unified_qgs_geom.isEmpty():
+                self.update_status(
+                    "Error: Could not create a valid geometry from the layer.", "error"
+                )
+                return
 
         geometry_str = unified_qgs_geom.asJson()
 
@@ -649,10 +684,6 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             geometry = json.loads(geometry_str)
         except Exception as e:
             self.update_status(f"Error parsing geometry JSON: {e}", "error")
-            return
-
-        if not all([selected_layer]):
-            self.update_status("Error: All fields are required to send.", "error")
             return
 
         # Start Processing
@@ -683,9 +714,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             self.start_listening(job_id)
 
         except Exception as e:
-            self.update_status(
-                f"Internal error sending request: not available", "error"
-            )
+            self.update_status(f"Error sending request: {e}", "error")
 
     def send_request_from_layer(self):
         """Sends a request to the API with the selected parameters, uploading the raster file."""
@@ -1118,23 +1147,23 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             self.requestPushButton.setEnabled(False)
             return
 
-        # Validate that selected layer is a valid polygon layer with features
+        # All validations passed, enable the button
+        self.requestPushButton.setEnabled(True)
+
+    def _validate_polygon_layer(self, selected_layer):
+        """Validate that the selected layer is a valid polygon layer with features"""
         if not isinstance(selected_layer, QgsVectorLayer):
-            self.requestPushButton.setEnabled(False)
-            return
+            return False
 
         if selected_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
-            self.requestPushButton.setEnabled(False)
-            return
+            return False
 
         # Check if layer has features
         feature_count = selected_layer.featureCount()
         if feature_count == 0:
-            self.requestPushButton.setEnabled(False)
-            return
+            return False
 
-        # All validations passed, enable the button
-        self.requestPushButton.setEnabled(True)
+        return True
 
     def validate_form_from_layer(self):
         """Validates the form and enables/disables the request button accordingly"""
@@ -1229,3 +1258,119 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             self.jobsTableWidget.setRowCount(0)
 
         self.update_status("Automatic logout due to token expiration", "info")
+
+    def on_aoi_method_changed(self):
+        """Handle changes in AOI method selection (draw rectangle vs select polygon)"""
+        if self.drawRectangleRadioButton.isChecked():
+            # Show drawing controls, hide polygon layer combo box
+            self.show_drawing_controls()
+            self.polygonLayerComboBox.setVisible(False)
+        else:
+            # Hide drawing controls, show polygon layer combo box
+            self.hide_drawing_controls()
+            self.polygonLayerComboBox.setVisible(True)
+
+        # Re-validate the form
+        self.validate_form_request()
+
+    def show_drawing_controls(self):
+        """Show the drawing controls"""
+        # Create a simple widget with draw/clear buttons
+        if self.bboxWidget is None:
+            from PyQt5.QtWidgets import (
+                QWidget,
+                QVBoxLayout,
+                QHBoxLayout,
+                QPushButton,
+                QLabel,
+            )
+
+            self.bboxWidget = QWidget()
+            layout = QVBoxLayout(self.bboxWidget)
+
+            # Instructions
+            instructions = QLabel("Click 'Draw Rectangle' to draw on the map")
+            instructions.setWordWrap(True)
+            layout.addWidget(instructions)
+
+            # Button layout
+            button_layout = QHBoxLayout()
+
+            self.drawButton = QPushButton("Draw Rectangle")
+            self.drawButton.clicked.connect(self.start_drawing)
+            button_layout.addWidget(self.drawButton)
+
+            self.clearButton = QPushButton("Clear Rectangle")
+            self.clearButton.clicked.connect(self.clear_drawing)
+            self.clearButton.setEnabled(False)
+            button_layout.addWidget(self.clearButton)
+
+            layout.addLayout(button_layout)
+
+            # Status label
+            self.statusLabel = QLabel("No rectangle drawn")
+            layout.addWidget(self.statusLabel)
+
+            # Insert the widget into the layout
+            self.aoiMethodLayout.insertWidget(2, self.bboxWidget)
+
+        if self.bboxWidget:
+            self.bboxWidget.setVisible(True)
+
+    def hide_drawing_controls(self):
+        """Hide the drawing controls"""
+        if self.bboxWidget:
+            self.bboxWidget.setVisible(False)
+
+        # Deactivate drawing tool if active
+        if self.rectangleMapTool:
+            from qgis.utils import iface
+
+            iface.mapCanvas().unsetMapTool(self.rectangleMapTool)
+            self.rectangleMapTool = None
+
+    def start_drawing(self):
+        """Start drawing mode"""
+        from qgis.utils import iface
+
+        if not iface:
+            self.statusLabel.setText("Error: QGIS interface not available")
+            return
+
+        # Create and set the map tool
+        self.rectangleMapTool = RectangleMapTool(iface.mapCanvas(), self)
+        iface.mapCanvas().setMapTool(self.rectangleMapTool)
+
+        self.statusLabel.setText("Click and drag on the map to draw rectangle...")
+
+    def clear_drawing(self):
+        """Clear the drawn rectangle"""
+        if self.rectangleMapTool:
+            self.rectangleMapTool.clear_rectangle()
+
+        self.current_bbox = None
+        self.statusLabel.setText("No rectangle drawn")
+        self.clearButton.setEnabled(False)
+
+        # Re-validate the form
+        self.validate_form_request()
+
+    def set_bbox_from_draw(self, minx, miny, maxx, maxy):
+        """Called by RectangleMapTool when a rectangle is drawn"""
+        self.current_bbox = (minx, miny, maxx, maxy)
+
+        # Update UI
+        self.drawButton.setText("Draw New Rectangle")
+        self.clearButton.setEnabled(True)
+        self.statusLabel.setText(
+            f"Rectangle drawn: {minx:.6f}, {miny:.6f} to {maxx:.6f}, {maxy:.6f}"
+        )
+
+        # Deactivate map tool
+        from qgis.utils import iface
+
+        iface.mapCanvas().unsetMapTool(self.rectangleMapTool)
+        self.rectangleMapTool = None
+
+        # Re-validate the form
+        self.validate_form_request()

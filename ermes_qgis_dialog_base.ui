@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>863</width>
-    <height>628</height>
+    <width>821</width>
+    <height>846</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -38,7 +38,7 @@
          </sizepolicy>
         </property>
         <property name="currentIndex">
-         <number>2</number>
+         <number>1</number>
         </property>
         <widget class="QWidget" name="loginTab">
          <property name="mouseTracking">
@@ -70,12 +70,12 @@
               <rect>
                <x>0</x>
                <y>0</y>
-               <width>833</width>
-               <height>578</height>
+               <width>791</width>
+               <height>796</height>
               </rect>
              </property>
              <layout class="QGridLayout" name="gridLayout_8">
-              <item row="10" column="3">
+              <item row="11" column="3">
                <widget class="QLineEdit" name="usernameLineEdit">
                 <property name="minimumSize">
                  <size>
@@ -94,21 +94,24 @@
                 </property>
                </widget>
               </item>
-              <item row="0" column="1" colspan="4">
-               <widget class="QLabel" name="welcomeLabel">
-                <property name="text">
-                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:14pt; font-weight:600;&quot;&gt;Welcome to ERMES for QGIS&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+              <item row="10" column="1">
+               <spacer name="indentLoginHorizontalSpacer">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
                 </property>
-                <property name="wordWrap">
-                 <bool>false</bool>
+                <property name="sizeType">
+                 <enum>QSizePolicy::Preferred</enum>
                 </property>
-                <property name="textInteractionFlags">
-                 <set>Qt::NoTextInteraction</set>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>20</width>
+                  <height>20</height>
+                 </size>
                 </property>
-               </widget>
+               </spacer>
               </item>
-              <item row="13" column="5">
-               <spacer name="horizontalSpacer_3">
+              <item row="10" column="5">
+               <spacer name="mainLoginHorizontalSpacer">
                 <property name="orientation">
                  <enum>Qt::Horizontal</enum>
                 </property>
@@ -120,7 +123,7 @@
                 </property>
                </spacer>
               </item>
-              <item row="6" column="1">
+              <item row="7" column="1">
                <spacer name="titleLoginVerticalSpacer">
                 <property name="orientation">
                  <enum>Qt::Vertical</enum>
@@ -136,7 +139,7 @@
                 </property>
                </spacer>
               </item>
-              <item row="13" column="3">
+              <item row="14" column="3">
                <widget class="QPushButton" name="loginPushButton">
                 <property name="minimumSize">
                  <size>
@@ -155,43 +158,20 @@
                 </property>
                </widget>
               </item>
-              <item row="10" column="2">
-               <widget class="QLabel" name="usernameLabel">
+              <item row="0" column="1" colspan="4">
+               <widget class="QLabel" name="welcomeLabel">
                 <property name="text">
-                 <string>Username</string>
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-size:14pt; font-weight:600;&quot;&gt;Welcome to ERMES for QGIS&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>false</bool>
+                </property>
+                <property name="textInteractionFlags">
+                 <set>Qt::NoTextInteraction</set>
                 </property>
                </widget>
               </item>
-              <item row="9" column="5">
-               <spacer name="mainLoginHorizontalSpacer">
-                <property name="orientation">
-                 <enum>Qt::Horizontal</enum>
-                </property>
-                <property name="sizeHint" stdset="0">
-                 <size>
-                  <width>40</width>
-                  <height>20</height>
-                 </size>
-                </property>
-               </spacer>
-              </item>
-              <item row="9" column="1">
-               <spacer name="indentLoginHorizontalSpacer">
-                <property name="orientation">
-                 <enum>Qt::Horizontal</enum>
-                </property>
-                <property name="sizeType">
-                 <enum>QSizePolicy::Preferred</enum>
-                </property>
-                <property name="sizeHint" stdset="0">
-                 <size>
-                  <width>20</width>
-                  <height>20</height>
-                 </size>
-                </property>
-               </spacer>
-              </item>
-              <item row="16" column="4">
+              <item row="17" column="4">
                <spacer name="mainLoginVerticalSpacer">
                 <property name="orientation">
                  <enum>Qt::Vertical</enum>
@@ -207,14 +187,7 @@
                 </property>
                </spacer>
               </item>
-              <item row="15" column="3">
-               <widget class="QLabel" name="loginInfoLabel">
-                <property name="text">
-                 <string>Enter your Username and Password to Login</string>
-                </property>
-               </widget>
-              </item>
-              <item row="11" column="3">
+              <item row="12" column="3">
                <widget class="QLineEdit" name="passwordLineEdit">
                 <property name="minimumSize">
                  <size>
@@ -233,10 +206,50 @@
                 </property>
                </widget>
               </item>
-              <item row="11" column="2">
+              <item row="12" column="2">
                <widget class="QLabel" name="passwordLabel">
                 <property name="text">
                  <string>Password</string>
+                </property>
+               </widget>
+              </item>
+              <item row="11" column="2">
+               <widget class="QLabel" name="usernameLabel">
+                <property name="text">
+                 <string>Username</string>
+                </property>
+               </widget>
+              </item>
+              <item row="14" column="5">
+               <spacer name="horizontalSpacer_3">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>40</width>
+                  <height>20</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+              <item row="16" column="3">
+               <widget class="QLabel" name="loginInfoLabel">
+                <property name="text">
+                 <string>Enter your Username and Password to Login</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="1" colspan="2">
+               <widget class="QLabel" name="titleLabel">
+                <property name="maximumSize">
+                 <size>
+                  <width>400</width>
+                  <height>200</height>
+                 </size>
+                </property>
+                <property name="text">
+                 <string/>
                 </property>
                </widget>
               </item>
@@ -273,12 +286,12 @@
               <rect>
                <x>0</x>
                <y>0</y>
-               <width>833</width>
-               <height>578</height>
+               <width>791</width>
+               <height>796</height>
               </rect>
              </property>
              <layout class="QGridLayout" name="gridLayout_4">
-              <item row="12" column="2">
+              <item row="20" column="1">
                <layout class="QHBoxLayout" name="horizontalLayout">
                 <item>
                  <widget class="QLineEdit" name="startDateLineEdit">
@@ -373,20 +386,122 @@
                 </item>
                </layout>
               </item>
-              <item row="16" column="2">
-               <spacer name="verticalSpacer">
-                <property name="orientation">
-                 <enum>Qt::Vertical</enum>
+              <item row="10" column="1">
+               <widget class="QLabel" name="aoiMethodLabel">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
                 </property>
-                <property name="sizeHint" stdset="0">
+                <property name="font">
+                 <font>
+                  <pointsize>10</pointsize>
+                  <weight>75</weight>
+                  <bold>true</bold>
+                 </font>
+                </property>
+                <property name="text">
+                 <string>Select/Draw an area of interest</string>
+                </property>
+               </widget>
+              </item>
+              <item row="26" column="1">
+               <widget class="QPushButton" name="requestPushButton">
+                <property name="minimumSize">
                  <size>
-                  <width>20</width>
-                  <height>20</height>
+                  <width>200</width>
+                  <height>0</height>
                  </size>
                 </property>
-               </spacer>
+                <property name="maximumSize">
+                 <size>
+                  <width>200</width>
+                  <height>16777215</height>
+                 </size>
+                </property>
+                <property name="text">
+                 <string>Get Layer</string>
+                </property>
+               </widget>
               </item>
-              <item row="4" column="2">
+              <item row="27" column="1">
+               <widget class="QTextBrowser" name="textLogger"/>
+              </item>
+              <item row="12" column="1">
+               <widget class="QLabel" name="timeRangeLabel">
+                <property name="font">
+                 <font>
+                  <pointsize>10</pointsize>
+                  <weight>75</weight>
+                  <bold>true</bold>
+                 </font>
+                </property>
+                <property name="text">
+                 <string>Select a date range</string>
+                </property>
+               </widget>
+              </item>
+              <item row="11" column="1">
+               <layout class="QVBoxLayout" name="aoiMethodLayout">
+                <property name="bottomMargin">
+                 <number>17</number>
+                </property>
+                <item>
+                 <widget class="QRadioButton" name="drawRectangleRadioButton">
+                  <property name="sizePolicy">
+                   <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+                    <horstretch>0</horstretch>
+                    <verstretch>0</verstretch>
+                   </sizepolicy>
+                  </property>
+                  <property name="text">
+                   <string>Draw Rectangle</string>
+                  </property>
+                  <property name="checked">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QRadioButton" name="selectPolygonRadioButton">
+                  <property name="text">
+                   <string>Select Polygon Layer</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QgsMapLayerComboBox" name="polygonLayerComboBox">
+                  <property name="maximumSize">
+                   <size>
+                    <width>400</width>
+                    <height>16777215</height>
+                   </size>
+                  </property>
+                  <property name="toolTip">
+                   <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select a polygon that delineates the area of interest&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <spacer name="verticalSpacer_4">
+                  <property name="orientation">
+                   <enum>Qt::Vertical</enum>
+                  </property>
+                  <property name="sizeType">
+                   <enum>QSizePolicy::Fixed</enum>
+                  </property>
+                  <property name="sizeHint" stdset="0">
+                   <size>
+                    <width>20</width>
+                    <height>20</height>
+                   </size>
+                  </property>
+                 </spacer>
+                </item>
+               </layout>
+              </item>
+              <item row="8" column="1">
                <widget class="QComboBox" name="layerTypeComboBox">
                 <property name="minimumSize">
                  <size>
@@ -403,6 +518,11 @@
                 <property name="toolTip">
                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select a layer to compute and retrieve&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                 </property>
+                <item>
+                 <property name="text">
+                  <string/>
+                 </property>
+                </item>
                 <item>
                  <property name="text">
                   <string>Burned area delineation</string>
@@ -435,41 +555,7 @@
                 </item>
                </widget>
               </item>
-              <item row="13" column="0">
-               <widget class="QWidget" name="verticalCalendarWidget" native="true">
-                <property name="enabled">
-                 <bool>true</bool>
-                </property>
-                <property name="minimumSize">
-                 <size>
-                  <width>137</width>
-                  <height>100</height>
-                 </size>
-                </property>
-                <property name="baseSize">
-                 <size>
-                  <width>0</width>
-                  <height>0</height>
-                 </size>
-                </property>
-                <layout class="QVBoxLayout" name="verticalLayout">
-                 <item>
-                  <spacer name="verticalCalendarSpacer">
-                   <property name="orientation">
-                    <enum>Qt::Vertical</enum>
-                   </property>
-                   <property name="sizeHint" stdset="0">
-                    <size>
-                     <width>20</width>
-                     <height>40</height>
-                    </size>
-                   </property>
-                  </spacer>
-                 </item>
-                </layout>
-               </widget>
-              </item>
-              <item row="13" column="2">
+              <item row="21" column="1">
                <layout class="QHBoxLayout" name="horizontalLayout_6">
                 <item>
                  <widget class="QLabel" name="calendarSpacer">
@@ -1011,115 +1097,127 @@
                 </item>
                </layout>
               </item>
-              <item row="12" column="0">
-               <widget class="QLabel" name="timeRangeLabel">
-                <property name="text">
-                 <string>Time range</string>
+              <item row="25" column="1">
+               <widget class="QSlider" name="horizontalSlider">
+                <property name="maximumSize">
+                 <size>
+                  <width>250</width>
+                  <height>16777215</height>
+                 </size>
+                </property>
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
                 </property>
                </widget>
               </item>
-              <item row="4" column="0">
+              <item row="0" column="1">
                <widget class="QLabel" name="layerTypeText">
+                <property name="font">
+                 <font>
+                  <pointsize>10</pointsize>
+                  <weight>75</weight>
+                  <bold>true</bold>
+                 </font>
+                </property>
                 <property name="text">
-                 <string>Layer type</string>
+                 <string>Select a Layer Type</string>
                 </property>
                </widget>
               </item>
-              <item row="14" column="2">
-               <layout class="QHBoxLayout" name="horizontalLayout_3">
-                <item>
-                 <spacer name="maxccSpacer">
-                  <property name="orientation">
-                   <enum>Qt::Horizontal</enum>
-                  </property>
-                  <property name="sizeHint" stdset="0">
-                   <size>
-                    <width>40</width>
-                    <height>0</height>
-                   </size>
-                  </property>
-                 </spacer>
-                </item>
-               </layout>
+              <item row="23" column="1">
+               <spacer name="verticalSpacer">
+                <property name="orientation">
+                 <enum>Qt::Vertical</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>20</width>
+                  <height>20</height>
+                 </size>
+                </property>
+               </spacer>
               </item>
-              <item row="15" column="2">
+              <item row="24" column="1">
                <layout class="QHBoxLayout" name="horizontalLayout_2">
                 <item>
                  <widget class="QLabel" name="label">
+                  <property name="font">
+                   <font>
+                    <pointsize>10</pointsize>
+                    <weight>75</weight>
+                    <bold>true</bold>
+                   </font>
+                  </property>
                   <property name="text">
                    <string>Cloud cover %             </string>
                   </property>
                  </widget>
                 </item>
-                <item>
-                 <widget class="QSlider" name="horizontalSlider">
-                  <property name="maximumSize">
-                   <size>
-                    <width>250</width>
-                    <height>16777215</height>
-                   </size>
-                  </property>
-                  <property name="orientation">
-                   <enum>Qt::Horizontal</enum>
-                  </property>
-                 </widget>
-                </item>
-                <item>
-                 <spacer name="horizontalSpacer_4">
-                  <property name="orientation">
-                   <enum>Qt::Horizontal</enum>
-                  </property>
-                  <property name="sizeHint" stdset="0">
-                   <size>
-                    <width>40</width>
-                    <height>20</height>
-                   </size>
-                  </property>
-                 </spacer>
-                </item>
                </layout>
               </item>
-              <item row="5" column="0">
-               <widget class="QLabel" name="aoiLabel">
-                <property name="text">
-                 <string>AOI</string>
+              <item row="9" column="1">
+               <spacer name="verticalSpacer_5">
+                <property name="orientation">
+                 <enum>Qt::Vertical</enum>
                 </property>
-               </widget>
+                <property name="sizeType">
+                 <enum>QSizePolicy::Fixed</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>20</width>
+                  <height>15</height>
+                 </size>
+                </property>
+               </spacer>
               </item>
-              <item row="5" column="2">
-               <widget class="QgsMapLayerComboBox" name="polygonLayerComboBox">
-                <property name="maximumSize">
-                 <size>
-                  <width>400</width>
-                  <height>16777215</height>
-                 </size>
-                </property>
-                <property name="toolTip">
-                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select a polygon that delineates the area of interest&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
-                </property>
-               </widget>
-              </item>
-              <item row="17" column="2">
-               <widget class="QPushButton" name="requestPushButton">
-                <property name="minimumSize">
-                 <size>
-                  <width>200</width>
-                  <height>0</height>
-                 </size>
-                </property>
-                <property name="maximumSize">
-                 <size>
-                  <width>200</width>
-                  <height>16777215</height>
-                 </size>
+              <item row="0" column="0">
+               <widget class="QLabel" name="label_2">
+                <property name="font">
+                 <font>
+                  <pointsize>19</pointsize>
+                 </font>
                 </property>
                 <property name="text">
-                 <string>Get Layer</string>
+                 <string>🗺️</string>
                 </property>
                </widget>
               </item>
-              <item row="18" column="2">
-               <widget class="QTextBrowser" name="textLogger"/>
+              <item row="10" column="0">
+               <widget class="QLabel" name="label_3">
+                <property name="font">
+                 <font>
+                  <pointsize>19</pointsize>
+                 </font>
+                </property>
+                <property name="text">
+                 <string>🖌️</string>
+                </property>
+               </widget>
+              </item>
+              <item row="12" column="0">
+               <widget class="QLabel" name="label_4">
+                <property name="font">
+                 <font>
+                  <pointsize>19</pointsize>
+                 </font>
+                </property>
+                <property name="text">
+                 <string>📆</string>
+                </property>
+               </widget>
+              </item>
+              <item row="24" column="0">
+               <widget class="QLabel" name="label_5">
+                <property name="font">
+                 <font>
+                  <pointsize>19</pointsize>
+                 </font>
+                </property>
+                <property name="text">
+                 <string>⛅</string>
+                </property>
+               </widget>
               </item>
              </layout>
             </widget>
@@ -1154,75 +1252,20 @@
               <rect>
                <x>0</x>
                <y>0</y>
-               <width>833</width>
-               <height>578</height>
+               <width>791</width>
+               <height>796</height>
               </rect>
              </property>
              <layout class="QGridLayout" name="gridLayout_6">
-            <item row="5" column="0">
-             <widget class="QLabel" name="fileLabel">
-              <property name="text">
-               <string>Raster Layer</string>
-              </property>
-             </widget>
-            </item>
-            <item row="11" column="2">
-             <widget class="QComboBox" name="imageTypeComboBox">
-              <property name="minimumSize">
-               <size>
-                <width>400</width>
-                <height>0</height>
-               </size>
-              </property>
-              <property name="maximumSize">
-               <size>
-                <width>400</width>
-                <height>16777215</height>
-               </size>
-              </property>
-              <item>
-               <property name="text">
-                <string>Sentinel-1 image</string>
-               </property>
+              <item row="5" column="0">
+               <widget class="QLabel" name="fileLabel">
+                <property name="text">
+                 <string>Raster Layer</string>
+                </property>
+               </widget>
               </item>
-              <item>
-               <property name="text">
-                <string>Sentinel-2 image</string>
-               </property>
-              </item>
-             </widget>
-            </item>
-            <item row="18" column="0">
-             <widget class="QLabel" name="requestedLayerText">
-              <property name="text">
-               <string>Output Layer</string>
-              </property>
-             </widget>
-            </item>
-            <item row="11" column="0">
-             <widget class="QLabel" name="imageTypeText">
-              <property name="text">
-               <string>Image Type</string>
-              </property>
-             </widget>
-            </item>
-            <item row="21" column="2">
-             <spacer name="verticalSpacer_3">
-              <property name="orientation">
-               <enum>Qt::Vertical</enum>
-              </property>
-              <property name="sizeHint" stdset="0">
-               <size>
-                <width>20</width>
-                <height>20</height>
-               </size>
-              </property>
-             </spacer>
-            </item>
-            <item row="18" column="2">
-             <layout class="QHBoxLayout" name="horizontalLayout_11">
-              <item>
-               <widget class="QComboBox" name="requestedLayerComboBox">
+              <item row="11" column="2">
+               <widget class="QComboBox" name="imageTypeComboBox">
                 <property name="minimumSize">
                  <size>
                   <width>400</width>
@@ -1235,74 +1278,164 @@
                   <height>16777215</height>
                  </size>
                 </property>
-                <property name="currentIndex">
-                 <number>-1</number>
-                </property>
                 <item>
                  <property name="text">
-                  <string>Burned area delineation</string>
+                  <string>Sentinel-1 image</string>
                  </property>
                 </item>
                 <item>
                  <property name="text">
-                  <string>Burn Severity estimation</string>
-                 </property>
-                </item>
-                <item>
-                 <property name="text">
-                  <string>Waterbody delineation</string>
+                  <string>Sentinel-2 image</string>
                  </property>
                 </item>
                </widget>
               </item>
-              <item>
-               <spacer name="horizontalSpacer_10">
+              <item row="18" column="0">
+               <widget class="QLabel" name="requestedLayerText">
+                <property name="text">
+                 <string>Output Layer</string>
+                </property>
+               </widget>
+              </item>
+              <item row="11" column="0">
+               <widget class="QLabel" name="imageTypeText">
+                <property name="text">
+                 <string>Image Type</string>
+                </property>
+               </widget>
+              </item>
+              <item row="21" column="2">
+               <spacer name="verticalSpacer_3">
                 <property name="orientation">
-                 <enum>Qt::Horizontal</enum>
+                 <enum>Qt::Vertical</enum>
                 </property>
                 <property name="sizeHint" stdset="0">
                  <size>
-                  <width>40</width>
-                  <height>0</height>
+                  <width>20</width>
+                  <height>20</height>
                  </size>
                 </property>
                </spacer>
               </item>
-             </layout>
-            </item>
-            <item row="5" column="2">
-             <widget class="QgsMapLayerComboBox" name="rasterLayerComboBox">
-              <property name="maximumSize">
-               <size>
-                <width>400</width>
-                <height>16777215</height>
-               </size>
-              </property>
-             </widget>
-            </item>
-            <item row="20" column="2">
-             <layout class="QHBoxLayout" name="horizontalLayout_12">
-              <item>
-               <widget class="QPushButton" name="requestFilePushButton">
-                <property name="minimumSize">
-                 <size>
-                  <width>200</width>
-                  <height>0</height>
-                 </size>
-                </property>
+              <item row="18" column="2">
+               <layout class="QHBoxLayout" name="horizontalLayout_11">
+                <item>
+                 <widget class="QComboBox" name="requestedLayerComboBox">
+                  <property name="minimumSize">
+                   <size>
+                    <width>400</width>
+                    <height>0</height>
+                   </size>
+                  </property>
+                  <property name="maximumSize">
+                   <size>
+                    <width>400</width>
+                    <height>16777215</height>
+                   </size>
+                  </property>
+                  <property name="currentIndex">
+                   <number>-1</number>
+                  </property>
+                  <item>
+                   <property name="text">
+                    <string>Burned area delineation</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Burn Severity estimation</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Waterbody delineation</string>
+                   </property>
+                  </item>
+                 </widget>
+                </item>
+                <item>
+                 <spacer name="horizontalSpacer_10">
+                  <property name="orientation">
+                   <enum>Qt::Horizontal</enum>
+                  </property>
+                  <property name="sizeHint" stdset="0">
+                   <size>
+                    <width>40</width>
+                    <height>0</height>
+                   </size>
+                  </property>
+                 </spacer>
+                </item>
+               </layout>
+              </item>
+              <item row="5" column="2">
+               <widget class="QgsMapLayerComboBox" name="rasterLayerComboBox">
                 <property name="maximumSize">
                  <size>
-                  <width>200</width>
+                  <width>400</width>
                   <height>16777215</height>
                  </size>
                 </property>
-                <property name="text">
-                 <string>Get Layer</string>
-                </property>
                </widget>
               </item>
-              <item>
-               <spacer name="horizontalSpacer_11">
+              <item row="20" column="2">
+               <layout class="QHBoxLayout" name="horizontalLayout_12">
+                <item>
+                 <widget class="QPushButton" name="requestFilePushButton">
+                  <property name="minimumSize">
+                   <size>
+                    <width>200</width>
+                    <height>0</height>
+                   </size>
+                  </property>
+                  <property name="maximumSize">
+                   <size>
+                    <width>200</width>
+                    <height>16777215</height>
+                   </size>
+                  </property>
+                  <property name="text">
+                   <string>Get Layer</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <spacer name="horizontalSpacer_11">
+                  <property name="orientation">
+                   <enum>Qt::Horizontal</enum>
+                  </property>
+                  <property name="sizeHint" stdset="0">
+                   <size>
+                    <width>40</width>
+                    <height>20</height>
+                   </size>
+                  </property>
+                 </spacer>
+                </item>
+               </layout>
+              </item>
+              <item row="19" column="0">
+               <widget class="QWidget" name="verticalSpace" native="true">
+                <property name="enabled">
+                 <bool>true</bool>
+                </property>
+                <property name="minimumSize">
+                 <size>
+                  <width>137</width>
+                  <height>100</height>
+                 </size>
+                </property>
+                <property name="baseSize">
+                 <size>
+                  <width>0</width>
+                  <height>0</height>
+                 </size>
+                </property>
+                <layout class="QVBoxLayout" name="verticalLayout_3"/>
+               </widget>
+              </item>
+              <item row="19" column="2">
+               <spacer name="horizontalSpacer_5">
                 <property name="orientation">
                  <enum>Qt::Horizontal</enum>
                 </property>
@@ -1314,67 +1447,32 @@
                 </property>
                </spacer>
               </item>
+              <item row="21" column="2">
+               <widget class="QTextBrowser" name="textLogger2">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="MinimumExpanding" vsizetype="MinimumExpanding">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
+               </widget>
+              </item>
+              <item row="22" column="2">
+               <spacer name="verticalSpacer_2">
+                <property name="orientation">
+                 <enum>Qt::Vertical</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>20</width>
+                  <height>20</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
              </layout>
-            </item>
-            <item row="19" column="0">
-             <widget class="QWidget" name="verticalSpace" native="true">
-              <property name="enabled">
-               <bool>true</bool>
-              </property>
-              <property name="minimumSize">
-               <size>
-                <width>137</width>
-                <height>100</height>
-               </size>
-              </property>
-              <property name="baseSize">
-               <size>
-                <width>0</width>
-                <height>0</height>
-               </size>
-              </property>
-              <layout class="QVBoxLayout" name="verticalLayout_3"/>
-             </widget>
-            </item>
-            <item row="19" column="2">
-             <spacer name="horizontalSpacer_5">
-              <property name="orientation">
-               <enum>Qt::Horizontal</enum>
-              </property>
-              <property name="sizeHint" stdset="0">
-               <size>
-                <width>40</width>
-                <height>20</height>
-               </size>
-              </property>
-             </spacer>
-            </item>
-            <item row="21" column="2">
-             <widget class="QTextBrowser" name="textLogger2">
-              <property name="sizePolicy">
-               <sizepolicy hsizetype="MinimumExpanding" vsizetype="MinimumExpanding">
-                <horstretch>0</horstretch>
-                <verstretch>0</verstretch>
-               </sizepolicy>
-              </property>
-             </widget>
-            </item>
-            <item row="22" column="2">
-             <spacer name="verticalSpacer_2">
-              <property name="orientation">
-               <enum>Qt::Vertical</enum>
-              </property>
-              <property name="sizeHint" stdset="0">
-               <size>
-                <width>20</width>
-                <height>20</height>
-               </size>
-              </property>
-             </spacer>
-            </item>
-           </layout>
-          </widget>
-         </widget>
+            </widget>
+           </widget>
           </item>
          </layout>
         </widget>
