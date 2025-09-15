@@ -1,6 +1,7 @@
 import time
 import requests
 from PyQt5.QtCore import QObject, pyqtSignal
+from .token_manager import TokenManager
 
 
 class JobsWorker(QObject):
@@ -16,14 +17,24 @@ class JobsWorker(QObject):
         self.api_base_url = api_base_url
         self.access_token = access_token
         self.is_running = True
+        self.token_manager = TokenManager(api_base_url)
+        self.token_manager.set_token(access_token)
 
     def _authenticate(self):
-        """Returns authentication headers"""
+        """Returns authentication headers after checking token validity"""
+        # Check if token is still valid
+        if not self.token_manager.check_and_handle_expiration():
+            # Token is expired, emit error signal
+            self.error.emit("Authentication token has expired. Please login again.")
+            return None
         return {"Authorization": f"Bearer {self.access_token}"}
 
     def _get_jobs(self):
         """Fetches all jobs for the current user"""
         headers = self._authenticate()
+        if headers is None:
+            return []  # Token expired, return empty list
+
         jobs_url = f"{self.api_base_url}/jobs/"
 
         response = requests.get(jobs_url, headers=headers)

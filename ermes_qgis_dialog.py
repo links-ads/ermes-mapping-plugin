@@ -25,18 +25,14 @@
 
 import os
 import requests
-from shapely.wkt import loads as wkt_loads
-from shapely.geometry import mapping
 import shutil
 import tempfile
 import zipfile
-from datetime import datetime, timezone
-
+from datetime import datetime
+import json
 from qgis.core import (
     QgsRasterLayer,
     QgsProject,
-    QgsMessageLog,
-    Qgis,
     QgsGeometry,
     QgsVectorLayer,
     QgsApplication,
@@ -44,7 +40,7 @@ from qgis.core import (
 )
 from qgis.PyQt import uic, QtWidgets
 from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView
-from qgis.PyQt.QtCore import QThread
+from qgis.PyQt.QtCore import QThread, QTimer
 from qgis.core import QgsMapLayerProxyModel
 
 # Store job data in the row for later use
@@ -53,6 +49,7 @@ from PyQt5.QtCore import Qt
 # Import the workers from their new modules
 from .workers.job import JobsWorker
 from .workers.main import MainWorker
+from .workers.token_manager import TokenManager
 
 import warnings
 
@@ -103,6 +100,12 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         self.username = None  # Will be set when user logs in
         self.password = None  # Will be set when user logs in
         self.access_token = None  # Will be set after successful login
+        self.token_manager = TokenManager(self.api_base_url)
+
+        # Token validation timer
+        self.token_timer = QTimer()
+        self.token_timer.timeout.connect(self.check_token_validity)
+        self.token_timer.setInterval(60000)  # Check every minute
 
         self.polygonLayerComboBox.setFilters(QgsMapLayerProxyModel.PolygonLayer)
         self.rasterLayerComboBox.setFilters(QgsMapLayerProxyModel.RasterLayer)
@@ -421,6 +424,12 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             self.update_status("Error: Please login before refreshing jobs.", "error")
             return
 
+        # Check token validity before making request
+        if not self.token_manager.check_and_handle_expiration():
+            self.perform_logout()
+            self.update_status("Session expired. Please login again.", "warning")
+            return
+
         self.update_status("Refreshing jobs table...", "info")
 
         try:
@@ -521,6 +530,9 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             self.username = username
             self.password = password
 
+            # Set token in token manager
+            self.token_manager.set_token(self.access_token)
+
             self.loginInfoLabel.setText("Login Successful ✅")
             # Enable the Request and Jobs tabs
             self.tabWidget.setTabEnabled(1, True)
@@ -528,6 +540,9 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             self.tabWidget.setTabEnabled(3, True)
             # Optionally, switch to the Request tab automatically
             self.tabWidget.setCurrentIndex(1)
+
+            # Start token validation timer
+            self.token_timer.start()
 
             # Start monitoring jobs
             self.start_jobs_monitoring()
@@ -586,7 +601,6 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         - Validating the selected polygon layer and its features.
         - Constructing a unified geometry from all features in the layer.
-        - Converting the geometry to WKT format and loading it as a Shapely polygon.
         - Constructing a message dictionary with the pipeline, geometry, and time range.
         - Publishing the message to the API.
 
@@ -598,6 +612,12 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         # Check if logged in
         if not self.access_token:
             self.update_status("Error: Please login before making a request.", "error")
+            return
+
+        # Check token validity before making request
+        if not self.token_manager.check_and_handle_expiration():
+            self.perform_logout()
+            self.update_status("Session expired. Please login again.", "warning")
             return
 
         # Retrieve user inputs
@@ -623,8 +643,13 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             )
             return
 
-        wkt_geometry = unified_qgs_geom.asWkt()
-        shapely_polygon = wkt_loads(wkt_geometry)
+        geometry_str = unified_qgs_geom.asJson()
+
+        try:
+            geometry = json.loads(geometry_str)
+        except Exception as e:
+            self.update_status(f"Error parsing geometry JSON: {e}", "error")
+            return
 
         if not all([selected_layer]):
             self.update_status("Error: All fields are required to send.", "error")
@@ -641,7 +666,7 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             job_url = f"{self.api_base_url}/jobs/create"
             job_data = {
                 "datatype_id": self.pipeline_map[pipeline_text],
-                "geometry": mapping(shapely_polygon),
+                "geometry": geometry,
                 "start_date": start_dt,
                 "end_date": end_dt,
             }
@@ -1002,6 +1027,9 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
     def closeEvent(self, event):
         """Ensure the thread is stopped when the dialog is closed."""
         try:
+            # Stop token validation timer
+            self.token_timer.stop()
+
             if self.thread and self.thread.isRunning():
                 self.worker.stop()
                 self.thread.quit()
@@ -1156,3 +1184,48 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                     "Sentinel-2 image",
                 ]
             )
+
+    def check_token_validity(self):
+        """Check if the current token is still valid and handle expiration"""
+        if not self.access_token:
+            return
+
+        if not self.token_manager.check_and_handle_expiration():
+            # Token is expired, perform automatic logout
+            self.perform_logout()
+            self.update_status("Session expired. Please login again.", "warning")
+
+    def perform_logout(self):
+        """Perform automatic logout when token expires"""
+        # Stop token validation timer
+        self.token_timer.stop()
+
+        # Clear authentication data
+        self.access_token = None
+        self.username = None
+        self.password = None
+        self.token_manager.clear_token()
+
+        # Stop jobs monitoring
+        if self.jobs_thread and self.jobs_thread.isRunning():
+            self.jobs_worker.stop()
+            self.jobs_thread.quit()
+            self.jobs_thread.wait()
+
+        # Disable all tabs except login
+        self.tabWidget.setTabEnabled(1, False)
+        self.tabWidget.setTabEnabled(2, False)
+        self.tabWidget.setTabEnabled(3, False)
+
+        # Switch to login tab
+        self.tabWidget.setCurrentIndex(0)
+
+        # Update login status
+        self.loginInfoLabel.setText("Session expired. Please login again.")
+        self.loginPushButton.setEnabled(True)
+
+        # Clear jobs table
+        if hasattr(self, "jobsTableWidget"):
+            self.jobsTableWidget.setRowCount(0)
+
+        self.update_status("Automatic logout due to token expiration", "info")

@@ -2,6 +2,7 @@ import os
 import time
 import requests
 from PyQt5.QtCore import QObject, pyqtSignal
+from .token_manager import TokenManager
 
 
 class MainWorker(QObject):
@@ -33,17 +34,21 @@ class MainWorker(QObject):
         self.job_id = job_id
         self.access_token = None
         self.is_running = True
+        self.token_manager = TokenManager(api_base_url)
 
     def _authenticate(self):
         """
         Authenticates with the API and gets an access token.
+        Checks for token expiration before making requests.
 
         :returns: A dictionary containing the Authorization header with the Bearer token.
         :raises HTTPError: If the authentication request fails.
         """
-        if self.access_token:
+        # Check if current token is still valid
+        if self.access_token and self.token_manager.is_token_valid():
             return {"Authorization": f"Bearer {self.access_token}"}
 
+        # Token is expired or doesn't exist, get a new one
         auth_url = f"{self.api_base_url}/auth/login"
         data = {
             "username": self.username,
@@ -55,6 +60,10 @@ class MainWorker(QObject):
 
         token_data = response.json()
         self.access_token = token_data["access_token"]
+
+        # Update token manager with new token
+        self.token_manager.set_token(self.access_token)
+
         return {"Authorization": f"Bearer {self.access_token}"}
 
     def _get_job_status(self):
@@ -145,10 +154,14 @@ class MainWorker(QObject):
                         if (
                             status_code == 404
                         ):  # Minor hack for error given on missing images (will fix in pipeline)
-                            self.status_updated.emit(f"Job Warning: {result}")
+                            self.status_updated.emit(
+                                f"Job {self.job_id} Warning: {result}"
+                            )
                             time.sleep(5)
                         else:
-                            self.error.emit(f"Job Error: {status_code} - {result}")
+                            self.error.emit(
+                                f"Job {self.job_id} Error: {status_code} - {result}"
+                            )
                             self.log_separator.emit()
                             break
                     elif status in ["pending", "start", "update"]:
@@ -158,7 +171,9 @@ class MainWorker(QObject):
                         )
                         time.sleep(1)  # Poll every 5 seconds
                     else:
-                        self.error.emit(f"Unknown job status: {status}")
+                        self.error.emit(
+                            f"Job {self.job_id} Unknown job status: {status}"
+                        )
                         self.log_separator.emit()
                         break
 
