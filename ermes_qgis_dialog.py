@@ -202,6 +202,7 @@ class ErmesQGISDialog(QDockWidget):
         # Connect UI signals to methods
         # Login
         self.loginPushButton.clicked.connect(self.login)
+        self.logoutButton.clicked.connect(self.perform_logout)
         # Request
         self.startDateLineEdit.mousePressEvent = lambda _: self.move_calendar(
             "start_date"
@@ -287,9 +288,13 @@ class ErmesQGISDialog(QDockWidget):
 
     def start_jobs_monitoring(self):
         """Start monitoring jobs from the API"""
-        if self.jobs_thread is not None and self.jobs_thread.isRunning():
-            self.update_status("Already monitoring jobs.", "warning")
-            return
+        try:
+            if self.jobs_thread is not None and self.jobs_thread.isRunning():
+                self.update_status("Already monitoring jobs.", "warning")
+                return
+        except Exception as e:
+            # If the jobs_thread is not initialized, create it
+            pass
 
         # Create a QThread for jobs monitoring
         self.jobs_thread = QThread()
@@ -597,6 +602,8 @@ class ErmesQGISDialog(QDockWidget):
             # Optionally, switch to the Request tab automatically
             self.tabWidget.setCurrentIndex(1)
 
+            self.logoutButton.setEnabled(True)
+
             # Start token validation timer
             self.token_timer.start()
 
@@ -642,7 +649,7 @@ class ErmesQGISDialog(QDockWidget):
             )
             self.loginPushButton.setEnabled(True)
         except Exception as e:
-            self.loginInfoLabel.setText(f"Login failed: Internal error")
+            self.loginInfoLabel.setText(f"Login failed: Internal error {e}")
             self.loginPushButton.setEnabled(True)
 
     def send_request(self):
@@ -1295,14 +1302,13 @@ class ErmesQGISDialog(QDockWidget):
         self.tabWidget.setCurrentIndex(0)
 
         # Update login status
-        self.loginInfoLabel.setText("Session expired. Please login again.")
+        self.loginInfoLabel.setText("Please login again.")
         self.loginPushButton.setEnabled(True)
+        self.logoutButton.setEnabled(False)
 
         # Clear jobs table
         if hasattr(self, "jobsTableWidget"):
             self.jobsTableWidget.setRowCount(0)
-
-        self.update_status("Automatic logout due to token expiration", "info")
 
     def on_aoi_method_changed(self):
         """Handle changes in AOI method selection (draw rectangle vs select polygon)"""
