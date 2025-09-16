@@ -21,7 +21,7 @@
  *                                                                         *
  ***************************************************************************/
 """
-from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication, Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
@@ -62,6 +62,7 @@ class ErmesQGIS:
         # Declare instance attributes
         self.actions = []
         self.menu = self.tr("&Ermes QGIS")
+        self.dock_widget = None
 
         # Check if plugin was started the first time in current QGIS session
         # Must be set in initGui() to survive plugin reloads
@@ -175,14 +176,25 @@ class ErmesQGIS:
             self.iface.removePluginMenu(self.tr("&Ermes QGIS"), action)
             self.iface.removeToolBarIcon(action)
 
+        # Remove the dock widget if it exists
+        if self.dock_widget:
+            self.iface.removeDockWidget(self.dock_widget)
+            self.dock_widget = None
+
     def run(self):
         """Run method that performs all the real work"""
 
-        # Create the dialog with elements (after translation) and keep reference
+        # Create the dock widget with elements (after translation) and keep reference
         # Only create GUI ONCE in callback, so that it will only load when the plugin is started
         if self.first_start == True:
             self.first_start = False
-            self.dlg = ErmesQGISDialog()
+            self.dock_widget = ErmesQGISDialog()
 
-        # show the dialog
-        self.dlg.show()
+            # Add the dock widget to the QGIS interface
+            self.iface.addDockWidget(Qt.RightDockWidgetArea, self.dock_widget)
+
+        # Show the dock widget (toggle visibility)
+        if self.dock_widget.isVisible():
+            self.dock_widget.hide()
+        else:
+            self.dock_widget.show()

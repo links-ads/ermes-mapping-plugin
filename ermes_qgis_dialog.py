@@ -38,8 +38,9 @@ from qgis.core import (
     QgsApplication,
     QgsWkbTypes,
 )
+from qgis.utils import iface
 from qgis.PyQt import uic, QtWidgets
-from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView
+from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView, QDockWidget
 from qgis.PyQt.QtCore import QThread, QTimer
 from qgis.core import QgsMapLayerProxyModel
 
@@ -80,12 +81,46 @@ FORM_CLASS, _ = uic.loadUiType(
 )
 
 
-class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
+class ErmesQGISDialog(QDockWidget):
     def __init__(self, parent=None):
-
         super(ErmesQGISDialog, self).__init__(parent)
-        self.setupUi(self)
 
+        # Set dock widget properties
+        self.setWindowTitle("ERMES for QGIS")
+        self.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        self.setFeatures(
+            QDockWidget.DockWidgetMovable
+            | QDockWidget.DockWidgetFloatable
+            | QDockWidget.DockWidgetClosable
+        )
+
+        # Load the UI file and set it as the widget for the dock
+        ui_file = os.path.join(os.path.dirname(__file__), "ermes_qgis_dialog_base.ui")
+
+        # Create a widget to hold the UI content
+        self.content_widget = QtWidgets.QWidget()
+        uic.loadUi(ui_file, self.content_widget)
+
+        # Set the content widget as the widget for the dock
+        self.setWidget(self.content_widget)
+
+        # Create a helper to access UI elements more easily
+        self.ui = self.content_widget
+
+        # Initialize the plugin
+        self._initialize_plugin()
+
+    def __getattr__(self, name):
+        """Redirect attribute access to UI elements"""
+        try:
+            return getattr(self.ui, name)
+        except AttributeError:
+            raise AttributeError(
+                f"'{self.__class__.__name__}' object has no attribute '{name}'"
+            )
+
+    def _initialize_plugin(self):
+        """Initialize plugin-specific data and settings"""
         # Setup for temporary directory management
         self.temp_dirs_to_clean = []
         QgsApplication.instance().aboutToQuit.connect(self.cleanup_temp_dirs)
@@ -99,6 +134,11 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         self.jobs_worker = None
         self.jobs_timer = None
 
+        # Initialize plugin data
+        self._initialize_plugin_data()
+
+    def _initialize_plugin_data(self):
+        """Initialize plugin-specific data and settings"""
         # Setup for API
         self.active_time = None
         self.api_base_url = "https://loki.linksfoundation.com/ermes-plugin"
@@ -106,6 +146,12 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         self.password = None  # Will be set when user logs in
         self.access_token = None  # Will be set after successful login
         self.token_manager = TokenManager(self.api_base_url)
+
+        # Initialize tab state - disable all tabs except login since no token yet
+        self.tabWidget.setTabEnabled(1, False)  # Request
+        self.tabWidget.setTabEnabled(2, False)  # From Layer
+        self.tabWidget.setTabEnabled(3, False)  # Jobs
+        self.tabWidget.setCurrentIndex(0)  # Switch to Login tab
 
         # Token validation timer
         self.token_timer = QTimer()
@@ -145,13 +191,6 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
             "fire_satellite_image_sentinel_2": "fire_satellite_image_sentinel_2.qml",
             "flood_satellite_image_sentinel_1": "flood_satellite_image_sentinel_1.qml",
         }
-
-        # UI: Disable Request and Jobs tabs until login is successful
-        # Assumes self.tabWidget is the QTabWidget containing the tabs
-        # and that tab 0 is Login, tab 1 is Request, tab 2 is From Layer, tab 3 is Jobs
-        self.tabWidget.setTabEnabled(1, False)
-        self.tabWidget.setTabEnabled(2, False)
-        self.tabWidget.setTabEnabled(3, False)
 
         # Setup jobs table
         self.setup_jobs_table()
@@ -888,7 +927,13 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
                 "info",
             )
 
-        QgsProject.instance().addMapLayer(layer)
+        QgsProject.instance().addMapLayer(layer, addToLegend=True)
+        # Move the layer to position 0 (top of the layer tree)
+        root = QgsProject.instance().layerTreeRoot()
+        node = root.findLayer(layer.id())
+        if node is not None:
+            root.insertChildNode(0, node.clone())
+            root.removeChildNode(node)
         self.update_status(f"Successfully loaded {layer_name}", "success")
         self.add_log_separator()
 
@@ -940,8 +985,8 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         project = QgsProject.instance()
         root = project.layerTreeRoot()
 
-        # Create a new group in the layer tree. The group_name comes from layer_name.
-        group = root.addGroup(group_name)
+        # Create a new group in the layer tree at position 0. The group_name comes from layer_name.
+        group = root.insertGroup(0, group_name)
 
         # Get style path if datatype_id is available and in the style map
         style_path = None
@@ -1324,14 +1369,12 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
 
         # Deactivate drawing tool if active
         if self.rectangleMapTool:
-            from qgis.utils import iface
 
             iface.mapCanvas().unsetMapTool(self.rectangleMapTool)
             self.rectangleMapTool = None
 
     def start_drawing(self):
         """Start drawing mode"""
-        from qgis.utils import iface
 
         if not iface:
             self.statusLabel.setText("Error: QGIS interface not available")
@@ -1367,7 +1410,6 @@ class ErmesQGISDialog(QtWidgets.QStackedWidget, FORM_CLASS):
         )
 
         # Deactivate map tool
-        from qgis.utils import iface
 
         iface.mapCanvas().unsetMapTool(self.rectangleMapTool)
         self.rectangleMapTool = None
