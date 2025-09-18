@@ -37,6 +37,9 @@ from qgis.core import (
     QgsVectorLayer,
     QgsApplication,
     QgsWkbTypes,
+    QgsRectangle,
+    QgsCoordinateTransform,
+    QgsCoordinateReferenceSystem,
 )
 from qgis.utils import iface
 from qgis.PyQt import uic, QtWidgets
@@ -414,6 +417,7 @@ class ErmesQGISDialog(QDockWidget):
 
     def download_job_resource(self, job_id):
         """Download a specific job resource and load it into QGIS"""
+
         try:
             # First, get the job details to retrieve the datatype_id
             job_url = f"{self.api_base_url}/jobs/{job_id}"
@@ -442,18 +446,20 @@ class ErmesQGISDialog(QDockWidget):
                 if not filename:
                     filename = f"{job_id}.zip"
 
-                # Save to temporary location
-                cache_dir = f"./tmp/{job_id}"
-                os.makedirs(cache_dir, exist_ok=True)
-                cache_path = os.path.join(cache_dir, filename)
+                # Use a temporary directory to save the file
+                with tempfile.TemporaryDirectory(
+                    prefix=f"qgis_ermes_{job_id}_"
+                ) as temp_dir:
+                    cache_path = os.path.join(temp_dir, filename)
 
-                with open(cache_path, "wb") as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
+                    with open(cache_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
 
-                # Load the downloaded file into QGIS with datatype_id
-                self.load_layer(cache_path, datatype_id)
+                    # Load the downloaded file into QGIS with datatype_id
+                    self.load_layer(cache_path, datatype_id)
+                # Temporary directory and file are automatically cleaned up here
 
         except Exception as e:
             self.update_status(f"Internal error downloading job {job_id}", "error")
@@ -695,9 +701,8 @@ class ErmesQGISDialog(QDockWidget):
                 self.update_status("Error: Please draw a rectangle first.", "error")
                 return
 
-            # Create geometry from bbox coordinates
+            # Create geometry from bbox coordinates (already in EPSG:4326 from bbox_widget)
             minx, miny, maxx, maxy = self.current_bbox
-            from qgis.core import QgsGeometry, QgsRectangle
 
             rect = QgsRectangle(minx, miny, maxx, maxy)
             unified_qgs_geom = QgsGeometry.fromRect(rect)
@@ -723,6 +728,24 @@ class ErmesQGISDialog(QDockWidget):
                     "Error: Could not create a valid geometry from the layer.", "error"
                 )
                 return
+
+            # Transform geometry to EPSG:4326 if needed
+            layer_crs = selected_layer.crs()
+            target_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+
+            if layer_crs != target_crs:
+                try:
+                    transform = QgsCoordinateTransform(
+                        layer_crs, target_crs, QgsProject.instance()
+                    )
+                    unified_qgs_geom.transform(transform)
+                    self.update_status(
+                        f"Transformed geometry from {layer_crs.authid()} to EPSG:4326",
+                        "info",
+                    )
+                except Exception as e:
+                    self.update_status(f"Error transforming geometry: {e}", "error")
+                    return
 
         geometry_str = unified_qgs_geom.asJson()
 
