@@ -45,6 +45,7 @@ from qgis.utils import iface
 from qgis.PyQt import uic, QtWidgets
 from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView, QDockWidget
 from qgis.PyQt.QtCore import QThread, QTimer
+from PyQt5.QtGui import QPixmap
 from qgis.core import QgsMapLayerProxyModel
 
 # Store job data in the row for later use
@@ -252,6 +253,9 @@ class ErmesQGISDialog(QDockWidget):
         # Initialize AOI method
         self.on_aoi_method_changed()
 
+        # Set up the ERMES image in the login tab
+        self.setup_ermes_image()
+
     def setup_jobs_table(self):
         """Setup the jobs table with appropriate columns"""
         # Assuming the table is named jobsTableWidget
@@ -272,7 +276,7 @@ class ErmesQGISDialog(QDockWidget):
             # Set column widths
             header = self.jobsTableWidget.horizontalHeader()
             header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID
-            header.setSectionResizeMode(1, QHeaderView.Stretch)  # Pipeline
+            header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Pipeline
             header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Status
             header.setSectionResizeMode(
                 3, QHeaderView.ResizeToContents
@@ -280,6 +284,9 @@ class ErmesQGISDialog(QDockWidget):
             header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Created
             header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Start Date
             header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # End Date
+
+            # Hide the vertical header (row numbers)
+            self.jobsTableWidget.verticalHeader().setVisible(False)
 
             # Enable selection
             self.jobsTableWidget.setSelectionBehavior(
@@ -1445,3 +1452,34 @@ class ErmesQGISDialog(QDockWidget):
 
         # Re-validate the form
         self.validate_form_request()
+
+    def setup_ermes_image(self):
+        """Set up the ERMES image in the login tab welcome label"""
+        try:
+            # Path to the ERMES image
+            ermes_image_path = os.path.join(base_path, "images", "ermes.png")
+
+            if os.path.exists(ermes_image_path):
+                # Load the image
+                pixmap = QPixmap(ermes_image_path)
+
+                # Scale the image to fit nicely in the welcome label
+                # Get the label size and scale the image proportionally
+                if hasattr(self, "welcomeLabel"):
+                    label_size = self.welcomeLabel.size()
+                    if label_size.width() > 0 and label_size.height() > 0:
+                        # Scale the image to fit within the label, maintaining aspect ratio
+                        scaled_pixmap = pixmap.scaled(
+                            label_size.width() * 3,
+                            label_size.height() * 3,
+                            Qt.KeepAspectRatio,
+                            Qt.SmoothTransformation,
+                        )
+                        self.welcomeLabel.setPixmap(scaled_pixmap)
+                        self.welcomeLabel.setAlignment(Qt.AlignCenter)
+                    else:
+                        # If label size is not available yet, use the original image
+                        self.welcomeLabel.setPixmap(pixmap)
+                        self.welcomeLabel.setAlignment(Qt.AlignCenter)
+        except Exception as e:
+            self.update_status(f"Error loading ERMES image: {e}", "error")
