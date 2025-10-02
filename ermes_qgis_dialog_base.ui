@@ -43,7 +43,7 @@
         </sizepolicy>
        </property>
        <property name="currentIndex">
-        <number>0</number>
+        <number>2</number>
        </property>
        <widget class="QWidget" name="loginTab">
         <property name="mouseTracking">
@@ -1246,14 +1246,20 @@
              </rect>
             </property>
             <layout class="QGridLayout" name="gridLayout_6">
-             <item row="5" column="0">
-              <widget class="QLabel" name="fileLabel">
-               <property name="text">
-                <string>Raster Layer</string>
+             <item row="22" column="3">
+              <spacer name="horizontalSpacer_5">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
                </property>
-              </widget>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
              </item>
-             <item row="11" column="2">
+             <item row="15" column="2">
               <widget class="QComboBox" name="imageTypeComboBox">
                <property name="minimumSize">
                 <size>
@@ -1279,69 +1285,145 @@
                </item>
               </widget>
              </item>
-             <item row="18" column="0">
-              <widget class="QLabel" name="requestedLayerText">
-               <property name="text">
-                <string>Output Layer</string>
+             <item row="24" column="2" colspan="2">
+              <widget class="QTextBrowser" name="textLogger2">
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="MinimumExpanding" vsizetype="MinimumExpanding">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
+                </sizepolicy>
                </property>
               </widget>
              </item>
-             <item row="11" column="0">
-              <widget class="QLabel" name="imageTypeText">
+             <item row="0" column="0">
+              <widget class="QLabel" name="label_6">
+               <property name="font">
+                <font>
+                 <pointsize>19</pointsize>
+                </font>
+               </property>
                <property name="text">
-                <string>Image Type</string>
+                <string>⏹️</string>
+               </property>
+              </widget>
+             </item>
+             <item row="14" column="2">
+              <widget class="QLabel" name="imageTypeText">
+               <property name="font">
+                <font>
+                 <pointsize>10</pointsize>
+                 <weight>75</weight>
+                 <bold>true</bold>
+                </font>
+               </property>
+               <property name="text">
+                <string>Raster Layer image type</string>
+               </property>
+              </widget>
+             </item>
+             <item row="16" column="2">
+              <widget class="QLabel" name="requestedLayerText">
+               <property name="font">
+                <font>
+                 <pointsize>10</pointsize>
+                 <weight>75</weight>
+                 <bold>true</bold>
+                </font>
+               </property>
+               <property name="text">
+                <string>Select an Output Layer</string>
+               </property>
+              </widget>
+             </item>
+             <item row="11" column="2">
+              <widget class="QgsMapLayerComboBox" name="rasterLayerComboBox">
+               <property name="maximumSize">
+                <size>
+                 <width>400</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="2">
+              <widget class="QLabel" name="fileLabel">
+               <property name="font">
+                <font>
+                 <pointsize>10</pointsize>
+                 <weight>75</weight>
+                 <bold>true</bold>
+                </font>
+               </property>
+               <property name="text">
+                <string>Select a Raster Layer</string>
+               </property>
+              </widget>
+             </item>
+             <item row="16" column="0">
+              <widget class="QLabel" name="label_8">
+               <property name="font">
+                <font>
+                 <pointsize>19</pointsize>
+                </font>
+               </property>
+               <property name="text">
+                <string>🗺️</string>
+               </property>
+              </widget>
+             </item>
+             <item row="14" column="0">
+              <widget class="QLabel" name="label_9">
+               <property name="font">
+                <font>
+                 <pointsize>19</pointsize>
+                </font>
+               </property>
+               <property name="text">
+                <string>🌏</string>
                </property>
               </widget>
              </item>
              <item row="21" column="2">
-              <spacer name="verticalSpacer_3">
-               <property name="orientation">
-                <enum>Qt::Vertical</enum>
-               </property>
-               <property name="sizeHint" stdset="0">
+              <widget class="QComboBox" name="requestedLayerComboBox">
+               <property name="minimumSize">
                 <size>
-                 <width>20</width>
-                 <height>20</height>
+                 <width>400</width>
+                 <height>0</height>
                 </size>
                </property>
-              </spacer>
-             </item>
-             <item row="18" column="2">
-              <layout class="QHBoxLayout" name="horizontalLayout_11">
+               <property name="maximumSize">
+                <size>
+                 <width>400</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="currentIndex">
+                <number>-1</number>
+               </property>
                <item>
-                <widget class="QComboBox" name="requestedLayerComboBox">
-                 <property name="minimumSize">
-                  <size>
-                   <width>400</width>
-                   <height>0</height>
-                  </size>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>400</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="currentIndex">
-                  <number>-1</number>
-                 </property>
-                 <item>
-                  <property name="text">
-                   <string>Burned area delineation</string>
-                  </property>
-                 </item>
-                 <item>
-                  <property name="text">
-                   <string>Burn Severity estimation</string>
-                  </property>
-                 </item>
-                 <item>
-                  <property name="text">
-                   <string>Waterbody delineation</string>
-                  </property>
-                 </item>
-                </widget>
+                <property name="text">
+                 <string>Burned area delineation</string>
+                </property>
                </item>
+               <item>
+                <property name="text">
+                 <string>Burn Severity estimation</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Waterbody delineation</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Water depth estimation</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item row="21" column="3">
+              <layout class="QHBoxLayout" name="horizontalLayout_11">
                <item>
                 <spacer name="horizontalSpacer_10">
                  <property name="orientation">
@@ -1357,37 +1439,8 @@
                </item>
               </layout>
              </item>
-             <item row="5" column="2">
-              <widget class="QgsMapLayerComboBox" name="rasterLayerComboBox">
-               <property name="maximumSize">
-                <size>
-                 <width>400</width>
-                 <height>16777215</height>
-                </size>
-               </property>
-              </widget>
-             </item>
-             <item row="20" column="2">
+             <item row="23" column="3">
               <layout class="QHBoxLayout" name="horizontalLayout_12">
-               <item>
-                <widget class="QPushButton" name="requestFilePushButton">
-                 <property name="minimumSize">
-                  <size>
-                   <width>200</width>
-                   <height>0</height>
-                  </size>
-                 </property>
-                 <property name="maximumSize">
-                  <size>
-                   <width>200</width>
-                   <height>16777215</height>
-                  </size>
-                 </property>
-                 <property name="text">
-                  <string>Get Layer</string>
-                 </property>
-                </widget>
-               </item>
                <item>
                 <spacer name="horizontalSpacer_11">
                  <property name="orientation">
@@ -1403,61 +1456,24 @@
                </item>
               </layout>
              </item>
-             <item row="19" column="0">
-              <widget class="QWidget" name="verticalSpace" native="true">
-               <property name="enabled">
-                <bool>true</bool>
-               </property>
+             <item row="23" column="2">
+              <widget class="QPushButton" name="requestFilePushButton">
                <property name="minimumSize">
                 <size>
-                 <width>137</width>
-                 <height>100</height>
-                </size>
-               </property>
-               <property name="baseSize">
-                <size>
-                 <width>0</width>
+                 <width>200</width>
                  <height>0</height>
                 </size>
                </property>
-               <layout class="QVBoxLayout" name="verticalLayout_3"/>
-              </widget>
-             </item>
-             <item row="19" column="2">
-              <spacer name="horizontalSpacer_5">
-               <property name="orientation">
-                <enum>Qt::Horizontal</enum>
-               </property>
-               <property name="sizeHint" stdset="0">
+               <property name="maximumSize">
                 <size>
-                 <width>40</width>
-                 <height>20</height>
+                 <width>200</width>
+                 <height>16777215</height>
                 </size>
                </property>
-              </spacer>
-             </item>
-             <item row="21" column="2">
-              <widget class="QTextBrowser" name="textLogger2">
-               <property name="sizePolicy">
-                <sizepolicy hsizetype="MinimumExpanding" vsizetype="MinimumExpanding">
-                 <horstretch>0</horstretch>
-                 <verstretch>0</verstretch>
-                </sizepolicy>
+               <property name="text">
+                <string>Get Layer</string>
                </property>
               </widget>
-             </item>
-             <item row="22" column="2">
-              <spacer name="verticalSpacer_2">
-               <property name="orientation">
-                <enum>Qt::Vertical</enum>
-               </property>
-               <property name="sizeHint" stdset="0">
-                <size>
-                 <width>20</width>
-                 <height>20</height>
-                </size>
-               </property>
-              </spacer>
              </item>
             </layout>
            </widget>

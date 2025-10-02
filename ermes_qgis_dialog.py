@@ -40,6 +40,7 @@ from qgis.core import (
     QgsRectangle,
     QgsCoordinateTransform,
     QgsCoordinateReferenceSystem,
+    QgsTask,
 )
 from qgis.utils import iface
 from qgis.PyQt import uic, QtWidgets
@@ -54,6 +55,7 @@ from PyQt5.QtCore import Qt
 # Import the workers from their new modules
 from .workers.job import JobsWorker
 from .workers.main import MainWorker
+from .workers.file_upload_task import FileUploadTask
 from .workers.token_manager import TokenManager
 
 # Import the BoundingBoxWidget
@@ -178,6 +180,7 @@ class ErmesQGISDialog(QDockWidget):
             "Waterbody delineation": "flood_post_waterbody_delineation",
             "Sentinel-2 image": "fire_satellite_image_sentinel_2",
             "Sentinel-1 image": "flood_satellite_image_sentinel_1",
+            "Water depth estimation": "flood_post_waterdepth_estimation",
         }
 
         # Available image types
@@ -194,8 +197,10 @@ class ErmesQGISDialog(QDockWidget):
             "flood_post_waterbody_delineation": "flood_post_waterbody_delineation.qml",
             "fire_satellite_image_sentinel_2": "fire_satellite_image_sentinel_2.qml",
             "flood_satellite_image_sentinel_1": "flood_satellite_image_sentinel_1.qml",
+            "flood_post_waterdepth_estimation": "flood_post_waterdepth_estimation.qml",
         }
-
+        # Set up the ERMES image in the login tab
+        self.setup_ermes_image()
         # Setup jobs table
         self.setup_jobs_table()
 
@@ -252,9 +257,6 @@ class ErmesQGISDialog(QDockWidget):
 
         # Initialize AOI method
         self.on_aoi_method_changed()
-
-        # Set up the ERMES image in the login tab
-        self.setup_ermes_image()
 
     def setup_jobs_table(self):
         """Setup the jobs table with appropriate columns"""
@@ -793,12 +795,13 @@ class ErmesQGISDialog(QDockWidget):
             self.update_status(f"Error sending request: {e}", "error")
 
     def send_request_from_layer(self):
-        """Sends a request to the API with the selected parameters, uploading the raster file."""
+        """Sends a request to the API with the selected parameters, uploading the raster file asynchronously."""
         if not self.access_token:
             self.update_status("Error: Please login before making a request.", "error")
             return
 
         # Retrieve user inputs
+        self.update_status("Retrieving user layers...")
         selected_layer = self.rasterLayerComboBox.currentLayer()
         image_type = self.imageTypeComboBox.currentText()
         requested_layer = self.requestedLayerComboBox.currentText()
@@ -816,55 +819,96 @@ class ErmesQGISDialog(QDockWidget):
             )
             return
 
-        # Start Processing
+        # Start asynchronous file upload using QgsTask
+        self.start_file_upload_task(
+            file_path,
+            self.pipeline_map[requested_layer],
+            self.image_type_map[image_type],
+        )
+
+    def start_file_upload_task(self, file_path: str, datatype_id: str, image_type: str):
+        """Start a QgsTask for uploading the file asynchronously."""
         try:
-            self.update_status("Sending request to API...")
+            filename = os.path.basename(file_path)
+            description = f"Uploading {filename} to ERMES API"
 
-            # Use the saved access token for authentication
-            headers = {"Authorization": f"Bearer {self.access_token}"}
+            # Validate file exists
+            if not os.path.exists(file_path):
+                self.update_status(f"Error: File {filename} does not exist", "error")
+                return
 
-            # Prepare the API endpoint and parameters
-            job_url = f"{self.api_base_url}/jobs/create/from_file"
-            params = {
-                "datatype_id": self.pipeline_map[requested_layer],
-                "image_type": self.image_type_map[image_type],
-            }
+            # Create the upload task
+            upload_task = FileUploadTask(
+                description=description,
+                file_path=file_path,
+                datatype_id=datatype_id,
+                image_type=image_type,
+                api_base_url=self.api_base_url,
+                access_token=self.access_token,
+                dialog_ref=self,
+            )
 
-            # Open the raster file for upload
-            with open(file_path, "rb") as f:
-                files = {
-                    "file": (os.path.basename(file_path), f, "image/tiff"),
-                }
-                response = requests.post(
-                    job_url, headers=headers, params=params, files=files
-                )
-                response.raise_for_status()
+            # Add the task to QGIS task manager
+            task_manager = QgsApplication.taskManager()
+            task_manager.addTask(upload_task)
 
-            # If the API returns a file (StreamingResponse), save it to a temp file and load it
-            content_type = response.headers.get("Content-Type", "")
-            if "image/tiff" in content_type or "image/tif" in content_type:
-                import tempfile
+            # Connect signals for safe communication
+            upload_task.status_update.connect(self.update_status)
+            upload_task.upload_completed.connect(self.on_file_upload_completed)
+            upload_task.upload_failed.connect(self.on_file_upload_failed)
 
-                temp_tiff = tempfile.NamedTemporaryFile(delete=False, suffix=".tif")
-                temp_tiff.write(response.content)
-                temp_tiff.close()
-                self.update_status(
-                    "Received result TIFF from API. Loading into QGIS...", "success"
-                )
-                self.load_layer(temp_tiff.name, self.pipeline_map[requested_layer])
-            else:
-                # If the API returns JSON (e.g., error), show the message
+            # Disable button during upload
+            self.requestFilePushButton.setEnabled(False)
+            self.update_status(f"Job created and started for: {filename}", "info")
+
+            # Check task status after a short delay
+            from PyQt5.QtCore import QTimer
+
+            def check_task_status():
                 try:
-                    error_json = response.json()
-                    error_msg = error_json.get("detail", str(error_json))
+                    status = upload_task.status()
+                    self.update_status(f"Task status: {status}", "info")
+                    if status == QgsTask.Queued:
+                        self.update_status("Task is queued but not running yet", "info")
+                    elif status == QgsTask.Running:
+                        self.update_status("Task is running", "info")
+                    elif status == QgsTask.Complete:
+                        self.update_status("Task completed", "info")
+                    elif status == QgsTask.Terminated:
+                        self.update_status("Task terminated", "warning")
+                    else:
+                        self.update_status(f"Unknown task status: {status}", "warning")
                 except Exception:
-                    error_msg = response.text
-                self.update_status(
-                    f"Internal error sending request from layer", "error"
-                )
+                    pass
+
+            # Check status after 2 seconds
+            QTimer.singleShot(2000, check_task_status)
+
+            # Also check after 5 seconds
+            QTimer.singleShot(5000, check_task_status)
 
         except Exception as e:
-            self.update_status(f"Internal error sending request from layer", "error")
+            self.update_status(f"Error starting file upload: {e}", "error")
+            self.requestFilePushButton.setEnabled(True)
+
+    def on_file_upload_completed(self, temp_file_path: str, datatype_id: str):
+        """Handle successful file upload completion"""
+        try:
+            self.update_status(
+                "File upload completed successfully. Loading result into QGIS...",
+                "success",
+            )
+            self.load_layer(temp_file_path, datatype_id)
+            self.add_log_separator()
+            self.requestFilePushButton.setEnabled(True)
+        except Exception as e:
+            self.update_status(f"Error loading uploaded file result: {e}", "error")
+            self.requestFilePushButton.setEnabled(True)
+
+    def on_file_upload_failed(self, error_message: str):
+        """Handle file upload failure"""
+        self.update_status(error_message, "error")
+        self.requestFilePushButton.setEnabled(True)
 
     def start_listening(self, job_id):
         """Set up the worker and thread to start monitoring the job."""
@@ -1282,7 +1326,9 @@ class ErmesQGISDialog(QDockWidget):
                 ["Burned area delineation", "Burn Severity estimation"]
             )
         elif image_type == "Sentinel-1 image":
-            self.requestedLayerComboBox.addItems(["Waterbody delineation"])
+            self.requestedLayerComboBox.addItems(
+                ["Waterbody delineation", "Water depth estimation"]
+            )
         else:
             # For other image types, show all options
             self.requestedLayerComboBox.addItems(
@@ -1293,6 +1339,7 @@ class ErmesQGISDialog(QDockWidget):
                     "Waterbody delineation",
                     "Sentinel-1 image",
                     "Sentinel-2 image",
+                    "Water depth estimation",
                 ]
             )
 
@@ -1322,7 +1369,6 @@ class ErmesQGISDialog(QDockWidget):
             self.jobs_worker.stop()
             self.jobs_thread.quit()
             self.jobs_thread.wait()
-
         # Disable all tabs except login
         self.tabWidget.setTabEnabled(1, False)
         self.tabWidget.setTabEnabled(2, False)
