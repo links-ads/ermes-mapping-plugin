@@ -43,7 +43,7 @@
         </sizepolicy>
        </property>
        <property name="currentIndex">
-        <number>2</number>
+        <number>1</number>
        </property>
        <widget class="QWidget" name="loginTab">
         <property name="mouseTracking">
@@ -109,6 +109,9 @@
                    <height>16777215</height>
                   </size>
                  </property>
+                 <property name="toolTip">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Click to login to the ERMES platform with your credentials&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 </property>
                  <property name="text">
                   <string>Login</string>
                  </property>
@@ -131,6 +134,9 @@
                    <height>16777215</height>
                   </size>
                  </property>
+                 <property name="toolTip">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Click to logout from the ERMES platform&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 </property>
                  <property name="text">
                   <string>Log out</string>
                  </property>
@@ -152,6 +158,9 @@
                  <height>25</height>
                 </size>
                </property>
+               <property name="toolTip">
+                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enter your username to access the platform&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               </property>
                <property name="clearButtonEnabled">
                 <bool>true</bool>
                </property>
@@ -170,6 +179,9 @@
                  <width>350</width>
                  <height>25</height>
                 </size>
+               </property>
+               <property name="toolTip">
+                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Enter your password&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                </property>
                <property name="echoMode">
                 <enum>QLineEdit::Password</enum>
@@ -280,7 +292,51 @@
              </rect>
             </property>
             <layout class="QGridLayout" name="gridLayout_4">
-             <item row="12" column="1">
+             <item row="0" column="0" colspan="2">
+              <widget class="QLabel" name="requestInfoBox">
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                 <horstretch>0</horstretch>
+                 <verstretch>0</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">QLabel {
+    background-color: #E3F2FD;
+    border: 1px solid #2196F3;
+    border-radius: 4px;
+    padding: 10px;
+    color: #1565C0;
+}</string>
+               </property>
+               <property name="text">
+                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;ℹ️ How to use:&lt;/span&gt;&lt;br/&gt;1. Select a &lt;b&gt;layer type&lt;/b&gt; from the list below&lt;br/&gt;2. Choose an &lt;b&gt;area of interest&lt;/b&gt; (map extent, draw rectangle, or select polygon)&lt;br/&gt;3. Set the &lt;b&gt;date range&lt;/b&gt; for the analysis&lt;br/&gt;4. Click &lt;b&gt;Get Layer&lt;/b&gt; to submit the request&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               </property>
+               <property name="wordWrap">
+                <bool>true</bool>
+               </property>
+               <property name="margin">
+                <number>5</number>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0" colspan="2">
+              <spacer name="verticalSpacer_infobox">
+               <property name="orientation">
+                <enum>Qt::Vertical</enum>
+               </property>
+               <property name="sizeType">
+                <enum>QSizePolicy::Fixed</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>20</width>
+                 <height>10</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item row="8" column="1">
               <widget class="QLabel" name="timeRangeLabel">
                <property name="font">
                 <font>
@@ -294,11 +350,24 @@
                </property>
               </widget>
              </item>
-             <item row="11" column="1">
+             <item row="7" column="1">
               <layout class="QVBoxLayout" name="aoiMethodLayout">
                <property name="bottomMargin">
                 <number>17</number>
                </property>
+               <item>
+                <widget class="QRadioButton" name="useMapExtentRadioButton">
+                 <property name="toolTip">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select this option to use the current map extent as the area of interest&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 </property>
+                 <property name="text">
+                  <string>Use Current Map Extent</string>
+                 </property>
+                 <property name="checked">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
                <item>
                 <widget class="QRadioButton" name="drawRectangleRadioButton">
                  <property name="sizePolicy">
@@ -307,16 +376,19 @@
                    <verstretch>0</verstretch>
                   </sizepolicy>
                  </property>
+                 <property name="toolTip">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select this option to draw a rectangular area of interest on the map&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 </property>
                  <property name="text">
                   <string>Draw Rectangle</string>
-                 </property>
-                 <property name="checked">
-                  <bool>true</bool>
                  </property>
                 </widget>
                </item>
                <item>
                 <widget class="QRadioButton" name="selectPolygonRadioButton">
+                 <property name="toolTip">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select this option to use an existing polygon layer as the area of interest&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 </property>
                  <property name="text">
                   <string>Select Polygon Layer</string>
                  </property>
@@ -353,7 +425,7 @@
                </item>
               </layout>
              </item>
-             <item row="10" column="1">
+             <item row="6" column="1">
               <widget class="QLabel" name="aoiMethodLabel">
                <property name="sizePolicy">
                 <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
@@ -373,79 +445,54 @@
                </property>
               </widget>
              </item>
-             <item row="8" column="1">
-              <widget class="QComboBox" name="layerTypeComboBox">
+             <item row="3" column="1">
+              <widget class="QListWidget" name="layerTypeListWidget">
                <property name="minimumSize">
                 <size>
                  <width>400</width>
-                 <height>0</height>
+                 <height>300</height>
                 </size>
                </property>
                <property name="maximumSize">
                 <size>
-                 <width>400</width>
-                 <height>16777215</height>
+                 <width>600</width>
+                 <height>400</height>
                 </size>
                </property>
                <property name="toolTip">
-                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select a layer to compute and retrieve&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select a layer type to compute and retrieve&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                </property>
-               <item>
-                <property name="text">
-                 <string/>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Burned area delineation</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Burn Severity estimation</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Active Flames and Smoke detection</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Waterbody delineation</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Sentinel-1 image</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>Sentinel-2 image</string>
-                </property>
-               </item>
+               <property name="selectionMode">
+                <enum>QAbstractItemView::SingleSelection</enum>
+               </property>
+               <property name="iconSize">
+                <size>
+                 <width>80</width>
+                 <height>80</height>
+                </size>
+               </property>
+               <property name="spacing">
+                <number>5</number>
+               </property>
               </widget>
              </item>
-             <item row="24" column="1">
-              <layout class="QHBoxLayout" name="horizontalLayout_2">
-               <item>
-                <widget class="QLabel" name="label">
-                 <property name="font">
-                  <font>
-                   <pointsize>10</pointsize>
-                   <weight>75</weight>
-                   <bold>true</bold>
-                  </font>
-                 </property>
-                 <property name="text">
-                  <string>Cloud cover %             </string>
-                 </property>
-                </widget>
-               </item>
-              </layout>
+             <item row="4" column="0" colspan="2">
+              <spacer name="verticalSpacer_afterList">
+               <property name="orientation">
+                <enum>Qt::Vertical</enum>
+               </property>
+               <property name="sizeType">
+                <enum>QSizePolicy::Fixed</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>20</width>
+                 <height>15</height>
+                </size>
+               </property>
+              </spacer>
              </item>
-             <item row="10" column="0">
+             <item row="6" column="0">
               <widget class="QLabel" name="label_3">
                <property name="font">
                 <font>
@@ -457,19 +504,7 @@
                </property>
               </widget>
              </item>
-             <item row="24" column="0">
-              <widget class="QLabel" name="label_5">
-               <property name="font">
-                <font>
-                 <pointsize>19</pointsize>
-                </font>
-               </property>
-               <property name="text">
-                <string>⛅</string>
-               </property>
-              </widget>
-             </item>
-             <item row="0" column="0">
+             <item row="2" column="0">
               <widget class="QLabel" name="label_2">
                <property name="font">
                 <font>
@@ -495,12 +530,15 @@
                  <height>16777215</height>
                 </size>
                </property>
+               <property name="toolTip">
+                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Submit request to process and retrieve the selected layer type for the specified area and time range&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               </property>
                <property name="text">
                 <string>Get Layer</string>
                </property>
               </widget>
              </item>
-             <item row="0" column="1">
+             <item row="2" column="1">
               <widget class="QLabel" name="layerTypeText">
                <property name="font">
                 <font>
@@ -514,7 +552,7 @@
                </property>
               </widget>
              </item>
-             <item row="12" column="0">
+             <item row="8" column="0">
               <widget class="QLabel" name="label_4">
                <property name="font">
                 <font>
@@ -563,6 +601,9 @@
                    <width>400</width>
                    <height>200</height>
                   </size>
+                 </property>
+                 <property name="toolTip">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select dates for your analysis. Click on a date to set start/end dates for the temporal range&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                  </property>
                  <property name="palette">
                   <palette>
@@ -1071,19 +1112,6 @@
              <item row="27" column="1">
               <widget class="QTextBrowser" name="textLogger"/>
              </item>
-             <item row="25" column="1">
-              <widget class="QSlider" name="horizontalSlider">
-               <property name="maximumSize">
-                <size>
-                 <width>250</width>
-                 <height>16777215</height>
-                </size>
-               </property>
-               <property name="orientation">
-                <enum>Qt::Horizontal</enum>
-               </property>
-              </widget>
-             </item>
              <item row="23" column="1">
               <spacer name="verticalSpacer">
                <property name="orientation">
@@ -1135,6 +1163,9 @@
                  <property name="focusPolicy">
                   <enum>Qt::ClickFocus</enum>
                  </property>
+                 <property name="toolTip">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Click to select the start date for the temporal range of your request&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 </property>
                  <property name="text">
                   <string/>
                  </property>
@@ -1175,6 +1206,9 @@
                  </property>
                  <property name="focusPolicy">
                   <enum>Qt::ClickFocus</enum>
+                 </property>
+                 <property name="toolTip">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Click to select the end date for the temporal range of your request&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                  </property>
                  <property name="inputMask">
                   <string/>
@@ -1273,6 +1307,9 @@
                  <height>16777215</height>
                 </size>
                </property>
+               <property name="toolTip">
+                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Specify whether the selected raster is a Sentinel-1 (SAR) or Sentinel-2 (optical) image&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               </property>
                <item>
                 <property name="text">
                  <string>Sentinel-1 image</string>
@@ -1343,6 +1380,9 @@
                  <height>16777215</height>
                 </size>
                </property>
+               <property name="toolTip">
+                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select a raster layer from your project to use as input for processing&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               </property>
               </widget>
              </item>
              <item row="0" column="2">
@@ -1396,6 +1436,9 @@
                  <width>400</width>
                  <height>16777215</height>
                 </size>
+               </property>
+               <property name="toolTip">
+                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select the type of analysis/output layer to generate from the input raster&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                </property>
                <property name="currentIndex">
                 <number>-1</number>
@@ -1470,6 +1513,9 @@
                  <height>16777215</height>
                 </size>
                </property>
+               <property name="toolTip">
+                <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Process the selected raster layer to generate the requested output layer&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+               </property>
                <property name="text">
                 <string>Get Layer</string>
                </property>
@@ -1515,6 +1561,9 @@
              <horstretch>0</horstretch>
              <verstretch>0</verstretch>
             </sizepolicy>
+           </property>
+           <property name="toolTip">
+            <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;View the history of all submitted processing jobs with their status and details&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
            </property>
            <property name="alternatingRowColors">
             <bool>true</bool>
@@ -1564,6 +1613,9 @@
           <layout class="QHBoxLayout" name="jobsButtonLayout">
            <item>
             <widget class="QPushButton" name="refreshJobsButton">
+             <property name="toolTip">
+              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Refresh the job list to update the status of all processing jobs&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+             </property>
              <property name="text">
               <string>Refresh</string>
              </property>
@@ -1571,6 +1623,9 @@
            </item>
            <item>
             <widget class="QPushButton" name="downloadJobButton">
+             <property name="toolTip">
+              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Download and load the completed layer from the selected job into QGIS&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+             </property>
              <property name="text">
               <string>Download Selected</string>
              </property>
@@ -1580,6 +1635,9 @@
             <widget class="QPushButton" name="deleteJobButton">
              <property name="enabled">
               <bool>false</bool>
+             </property>
+             <property name="toolTip">
+              <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Delete the selected job from the server (this action cannot be undone)&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
              </property>
              <property name="text">
               <string>Delete Selected</string>

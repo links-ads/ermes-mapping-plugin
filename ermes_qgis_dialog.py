@@ -30,6 +30,7 @@ import tempfile
 import zipfile
 from datetime import datetime
 import json
+import base64
 from qgis.core import (
     QgsRasterLayer,
     QgsProject,
@@ -44,9 +45,9 @@ from qgis.core import (
 )
 from qgis.utils import iface
 from qgis.PyQt import uic, QtWidgets
-from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView, QDockWidget
-from qgis.PyQt.QtCore import QThread, QTimer
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView, QDockWidget, QListWidgetItem
+from qgis.PyQt.QtCore import QThread, QTimer, QSize
+from PyQt5.QtGui import QPixmap, QIcon
 from qgis.core import QgsMapLayerProxyModel
 
 # Store job data in the row for later use
@@ -172,16 +173,47 @@ class ErmesQGISDialog(QDockWidget):
         self.rectangleMapTool = None
         self.current_bbox = None  # Store current bounding box coordinates
 
-        # Available pipelines
-        self.pipeline_map = {
-            "Burned area delineation": "fire_burned_area_delineation",
-            "Burn Severity estimation": "fire_burned_area_severity_estimation",
-            "Active Flames and Smoke detection": "fire_active_flames_and_smoke_detection",
-            "Waterbody delineation": "flood_post_waterbody_delineation",
-            "Sentinel-2 image": "fire_satellite_image_sentinel_2",
-            "Sentinel-1 image": "flood_satellite_image_sentinel_1",
-            "Water depth estimation": "flood_post_waterdepth_estimation",
+        # Available pipelines with descriptions and images
+        self.pipeline_info = {
+            "Sentinel-1 image": {
+                "pipeline": "flood_satellite_image_sentinel_1",
+                "description": "Download SAR (VV and VH polarization) imagery from Sentinel-1",
+                "image": "sentinel1_icon.png"
+            },
+            "Sentinel-2 image": {
+                "pipeline": "fire_satellite_image_sentinel_2",
+                "description": "Download optical (B1-B12) imagery from Sentinel-2",
+                "image": "sentinel2_icon.png"
+            },
+            "Burned area delineation": {
+                "pipeline": "fire_burned_area_delineation",
+                "description": "Detect and map burned areas from Sentinel-2 imagery",
+                "image": "burned_area_icon.png"
+            },
+            "Burn Severity estimation": {
+                "pipeline": "fire_burned_area_severity_estimation",
+                "description": "Estimate the severity of burned areas using Sentinel-2 imagery",
+                "image": "burn_severity_icon.png"
+            },
+            "Active Flames and Smoke detection": {
+                "pipeline": "fire_active_flames_and_smoke_detection",
+                "description": "Detect active fires fronts and smoke",
+                "image": "active_fire_icon.png"
+            },
+            "Waterbody delineation": {
+                "pipeline": "flood_post_waterbody_delineation",
+                "description": "Map water bodies and flooded areas from Sentinel-1 imagery",
+                "image": "waterbody_icon.png"
+            },
+            "Water depth estimation": {
+                "pipeline": "flood_post_waterdepth_estimation",
+                "description": "Estimate water depth in flooded regions from Sentinel-1 imagery and DTM",
+                "image": "water_depth_icon.png"
+            },
         }
+        
+        # Keep backward compatibility with old pipeline_map
+        self.pipeline_map = {k: v["pipeline"] for k, v in self.pipeline_info.items()}
 
         # Available image types
         self.image_type_map = {
@@ -203,6 +235,8 @@ class ErmesQGISDialog(QDockWidget):
         self.setup_ermes_image()
         # Setup jobs table
         self.setup_jobs_table()
+        # Setup layer type list widget
+        self.setup_layer_type_list()
 
         # Initialize status messages list
         self.status_messages = []
@@ -229,6 +263,7 @@ class ErmesQGISDialog(QDockWidget):
         # Connect radio button signals for AOI method selection
         self.drawRectangleRadioButton.toggled.connect(self.on_aoi_method_changed)
         self.selectPolygonRadioButton.toggled.connect(self.on_aoi_method_changed)
+        self.useMapExtentRadioButton.toggled.connect(self.on_aoi_method_changed)
 
         self.requestPushButton.clicked.connect(self.send_request)
 
@@ -257,6 +292,70 @@ class ErmesQGISDialog(QDockWidget):
 
         # Initialize AOI method
         self.on_aoi_method_changed()
+        
+        # Load saved credentials if they exist
+        self.load_credentials()
+
+    def get_credentials_file_path(self):
+        """Get the path to the credentials file"""
+        # Store credentials in the plugin directory
+        plugin_dir = os.path.dirname(__file__)
+        return os.path.join(plugin_dir, ".credentials")
+    
+    def save_credentials(self, username, password):
+        """Save credentials to a file with basic encoding"""
+        try:
+            credentials_path = self.get_credentials_file_path()
+            
+            # Encode credentials (basic obfuscation, not secure encryption)
+            encoded_username = base64.b64encode(username.encode()).decode()
+            encoded_password = base64.b64encode(password.encode()).decode()
+            
+            credentials = {
+                "username": encoded_username,
+                "password": encoded_password
+            }
+            
+            with open(credentials_path, 'w') as f:
+                json.dump(credentials, f)
+                
+        except Exception as e:
+            # Don't fail if we can't save credentials, just log it
+            print(f"Could not save credentials: {e}")
+    
+    def load_credentials(self):
+        """Load credentials from file if it exists"""
+        try:
+            credentials_path = self.get_credentials_file_path()
+            
+            if not os.path.exists(credentials_path):
+                return
+            
+            with open(credentials_path, 'r') as f:
+                credentials = json.load(f)
+            
+            # Decode credentials
+            username = base64.b64decode(credentials["username"].encode()).decode()
+            password = base64.b64decode(credentials["password"].encode()).decode()
+            
+            # Set the credentials in the UI
+            if hasattr(self, "usernameLineEdit"):
+                self.usernameLineEdit.setText(username)
+            if hasattr(self, "passwordLineEdit"):
+                self.passwordLineEdit.setText(password)
+                
+        except Exception as e:
+            # Don't fail if we can't load credentials, just continue
+            print(f"Could not load credentials: {e}")
+    
+    def clear_saved_credentials(self):
+        """Delete the saved credentials file"""
+        try:
+            credentials_path = self.get_credentials_file_path()
+            if os.path.exists(credentials_path):
+                os.remove(credentials_path)
+        except Exception as e:
+            print(f"Could not delete credentials file: {e}")
 
     def setup_jobs_table(self):
         """Setup the jobs table with appropriate columns"""
@@ -297,6 +396,45 @@ class ErmesQGISDialog(QDockWidget):
             self.jobsTableWidget.setSelectionMode(
                 QtWidgets.QAbstractItemView.MultiSelection
             )
+
+    def setup_layer_type_list(self):
+        """Setup the layer type list widget with images and descriptions"""
+        if hasattr(self, "layerTypeListWidget"):
+            self.layerTypeListWidget.clear()
+            
+            # Get the base path for images (plugin root directory)
+            base_path = os.path.dirname(__file__)
+            
+            for layer_name, layer_data in self.pipeline_info.items():
+                # Create list widget item
+                item = QListWidgetItem()
+                
+                # Set the icon (look in plugin root directory)
+                icon_path = os.path.join(base_path,"images", layer_data["image"])
+                if os.path.exists(icon_path):
+                    item.setIcon(QIcon(icon_path))
+                else:
+                    # Use default QGIS icon as placeholder
+                    item.setIcon(QIcon(":/images/themes/default/mIconRaster.svg"))
+                
+                # Set the text with name and description
+                item.setText(f"{layer_name}\n{layer_data['description']}")
+                
+                # Store the layer name as user data for easy retrieval
+                item.setData(Qt.UserRole, layer_name)
+                
+                # Set tooltip
+                item.setToolTip(f"{layer_name}: {layer_data['description']}")
+                
+                # Add item to list
+                self.layerTypeListWidget.addItem(item)
+            
+            # Select the first item (Sentinel-1 image) by default
+            if self.layerTypeListWidget.count() > 0:
+                self.layerTypeListWidget.setCurrentRow(0)
+            
+            # Connect selection change signal
+            self.layerTypeListWidget.itemSelectionChanged.connect(self.validate_form_request)
 
     def start_jobs_monitoring(self):
         """Start monitoring jobs from the API"""
@@ -605,6 +743,9 @@ class ErmesQGISDialog(QDockWidget):
             # Save credentials for later use
             self.username = username
             self.password = password
+            
+            # Save credentials to file for auto-login
+            self.save_credentials(username, password)
 
             # Set token in token manager
             self.token_manager.set_token(self.access_token)
@@ -699,7 +840,13 @@ class ErmesQGISDialog(QDockWidget):
             return
 
         # Retrieve user inputs
-        pipeline_text = self.layerTypeComboBox.currentText()
+        # Get selected layer from list widget
+        selected_items = self.layerTypeListWidget.selectedItems()
+        if not selected_items:
+            self.update_status("Error: Please select a layer type.", "error")
+            return
+        
+        pipeline_text = selected_items[0].data(Qt.UserRole)
         start_dt = self.startDateLineEdit.text()
         end_dt = self.endDateLineEdit.text()
 
@@ -715,7 +862,8 @@ class ErmesQGISDialog(QDockWidget):
 
             rect = QgsRectangle(minx, miny, maxx, maxy)
             unified_qgs_geom = QgsGeometry.fromRect(rect)
-        else:
+            
+        elif self.selectPolygonRadioButton.isChecked():
             # Use selected polygon layer
             selected_layer = self.polygonLayerComboBox.currentLayer()
             if not isinstance(selected_layer, QgsVectorLayer):
@@ -755,6 +903,33 @@ class ErmesQGISDialog(QDockWidget):
                 except Exception as e:
                     self.update_status(f"Error transforming geometry: {e}", "error")
                     return
+                    
+        else:  # useMapExtentRadioButton is checked
+            # Use current map extent
+            canvas = iface.mapCanvas()
+            extent = canvas.extent()
+            canvas_crs = canvas.mapSettings().destinationCrs()
+            target_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+            
+            # Create geometry from extent
+            unified_qgs_geom = QgsGeometry.fromRect(extent)
+            
+            # Transform to EPSG:4326 if needed
+            if canvas_crs != target_crs:
+                try:
+                    transform = QgsCoordinateTransform(
+                        canvas_crs, target_crs, QgsProject.instance()
+                    )
+                    unified_qgs_geom.transform(transform)
+                    self.update_status(
+                        f"Using current map extent (transformed from {canvas_crs.authid()} to EPSG:4326)",
+                        "info",
+                    )
+                except Exception as e:
+                    self.update_status(f"Error transforming map extent: {e}", "error")
+                    return
+            else:
+                self.update_status("Using current map extent as area of interest", "info")
 
         geometry_str = unified_qgs_geom.asJson()
 
@@ -1249,10 +1424,29 @@ class ErmesQGISDialog(QDockWidget):
         # Check if all required fields are filled
         start_date = self.startDateLineEdit.text().strip()
         end_date = self.endDateLineEdit.text().strip()
-        selected_layer = self.polygonLayerComboBox.currentLayer()
+        
+        # Check layer type selection
+        selected_layer_type = self.layerTypeListWidget.selectedItems()
+        if not selected_layer_type:
+            self.requestPushButton.setEnabled(False)
+            return
+        
+        # Check AOI method
+        if self.drawRectangleRadioButton.isChecked():
+            # For drawn rectangle, check if bbox exists
+            if not self.current_bbox:
+                self.requestPushButton.setEnabled(False)
+                return
+        elif self.selectPolygonRadioButton.isChecked():
+            # For polygon layer, check if valid layer selected
+            selected_layer = self.polygonLayerComboBox.currentLayer()
+            if not selected_layer:
+                self.requestPushButton.setEnabled(False)
+                return
+        # For map extent, no additional check needed - always available
 
         # Basic validation: all fields must be present
-        if not start_date or not end_date or not selected_layer:
+        if not start_date or not end_date:
             self.requestPushButton.setEnabled(False)
             return
 
@@ -1363,6 +1557,9 @@ class ErmesQGISDialog(QDockWidget):
         self.username = None
         self.password = None
         self.token_manager.clear_token()
+        
+        # Clear saved credentials file
+        self.clear_saved_credentials()
 
         # Stop jobs monitoring
         if self.jobs_thread and self.jobs_thread.isRunning():
@@ -1381,21 +1578,31 @@ class ErmesQGISDialog(QDockWidget):
         self.loginInfoLabel.setText("Please login again.")
         self.loginPushButton.setEnabled(True)
         self.logoutButton.setEnabled(False)
+        
+        # Clear username and password fields
+        if hasattr(self, "usernameLineEdit"):
+            self.usernameLineEdit.clear()
+        if hasattr(self, "passwordLineEdit"):
+            self.passwordLineEdit.clear()
 
         # Clear jobs table
         if hasattr(self, "jobsTableWidget"):
             self.jobsTableWidget.setRowCount(0)
 
     def on_aoi_method_changed(self):
-        """Handle changes in AOI method selection (draw rectangle vs select polygon)"""
+        """Handle changes in AOI method selection (draw rectangle vs select polygon vs map extent)"""
         if self.drawRectangleRadioButton.isChecked():
             # Show drawing controls, hide polygon layer combo box
             self.show_drawing_controls()
             self.polygonLayerComboBox.setVisible(False)
-        else:
+        elif self.selectPolygonRadioButton.isChecked():
             # Hide drawing controls, show polygon layer combo box
             self.hide_drawing_controls()
             self.polygonLayerComboBox.setVisible(True)
+        else:  # useMapExtentRadioButton is checked
+            # Hide both drawing controls and polygon layer combo box
+            self.hide_drawing_controls()
+            self.polygonLayerComboBox.setVisible(False)
 
         # Re-validate the form
         self.validate_form_request()
