@@ -45,7 +45,7 @@ from qgis.core import (
 )
 from qgis.utils import iface
 from qgis.PyQt import uic, QtWidgets
-from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView, QDockWidget, QListWidgetItem
+from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView, QDockWidget, QListWidgetItem, QProgressBar, QLabel, QVBoxLayout
 from qgis.PyQt.QtCore import QThread, QTimer, QSize
 from PyQt5.QtGui import QPixmap, QIcon
 from qgis.core import QgsMapLayerProxyModel
@@ -295,6 +295,9 @@ class ErmesQGISDialog(QDockWidget):
         
         # Load saved credentials if they exist
         self.load_credentials()
+        
+        # Setup loading indicators for the "Get Layer" buttons
+        self.setup_loading_indicators()
 
     def get_credentials_file_path(self):
         """Get the path to the credentials file"""
@@ -1032,8 +1035,9 @@ class ErmesQGISDialog(QDockWidget):
             upload_task.upload_completed.connect(self.on_file_upload_completed)
             upload_task.upload_failed.connect(self.on_file_upload_failed)
 
-            # Disable button during upload
+            # Disable button during upload and show loading indicator
             self.requestFilePushButton.setEnabled(False)
+            self.fromLayerLoadingLabel.setVisible(True)
             self.update_status(f"Job created and started for: {filename}", "info")
 
             # Check task status after a short delay
@@ -1065,6 +1069,7 @@ class ErmesQGISDialog(QDockWidget):
         except Exception as e:
             self.update_status(f"Error starting file upload: {e}", "error")
             self.requestFilePushButton.setEnabled(True)
+            self.fromLayerLoadingLabel.setVisible(False)
 
     def on_file_upload_completed(self, temp_file_path: str, datatype_id: str):
         """Handle successful file upload completion"""
@@ -1076,14 +1081,17 @@ class ErmesQGISDialog(QDockWidget):
             self.load_layer(temp_file_path, datatype_id)
             self.add_log_separator()
             self.requestFilePushButton.setEnabled(True)
+            self.fromLayerLoadingLabel.setVisible(False)
         except Exception as e:
             self.update_status(f"Error loading uploaded file result: {e}", "error")
             self.requestFilePushButton.setEnabled(True)
+            self.fromLayerLoadingLabel.setVisible(False)
 
     def on_file_upload_failed(self, error_message: str):
         """Handle file upload failure"""
         self.update_status(error_message, "error")
         self.requestFilePushButton.setEnabled(True)
+        self.fromLayerLoadingLabel.setVisible(False)
 
     def start_listening(self, job_id):
         """Set up the worker and thread to start monitoring the job."""
@@ -1121,8 +1129,9 @@ class ErmesQGISDialog(QDockWidget):
         # Start the thread
         self.thread.start()
 
-        # Disable button
+        # Disable button and show loading indicator
         self.requestPushButton.setEnabled(False)
+        self.requestLoadingLabel.setVisible(True)
         self.update_status(f"Started monitoring job {job_id}...", "info")
 
     def load_layer(self, file_path, datatype_id=None):
@@ -1380,8 +1389,9 @@ class ErmesQGISDialog(QDockWidget):
         Cleans up thread and worker references after the thread has finished.
         This slot is connected to the thread's finished signal.
         """
-        # Re-enable the button so the user can start another job
+        # Re-enable the button and hide loading indicator
         self.requestPushButton.setEnabled(True)
+        self.requestLoadingLabel.setVisible(False)
 
         # Set the Python references to None
         self.thread = None
@@ -1705,6 +1715,78 @@ class ErmesQGISDialog(QDockWidget):
 
         # Re-validate the form
         self.validate_form_request()
+
+    def setup_loading_indicators(self):
+        """Setup loading indicators for the Get Layer buttons"""
+        from PyQt5.QtWidgets import QHBoxLayout, QWidget
+        
+        # Create loading indicator for Request tab
+        self.requestLoadingLabel = QLabel("⏳ Processing...")
+        self.requestLoadingLabel.setStyleSheet("""
+            QLabel {
+                color: #1565C0;
+                font-weight: bold;
+                padding: 5px;
+                background-color: #E3F2FD;
+                border: 1px solid #2196F3;
+                border-radius: 4px;
+            }
+        """)
+        self.requestLoadingLabel.setVisible(False)
+        
+        # Get the grid layout from the Request tab
+        request_grid = self.requestPushButton.parent().layout()
+        if isinstance(request_grid, QtWidgets.QGridLayout):
+            # Find the button's position
+            button_index = request_grid.indexOf(self.requestPushButton)
+            if button_index >= 0:
+                row, col, rowspan, colspan = request_grid.getItemPosition(button_index)
+                
+                # Remove the button from the grid
+                request_grid.removeWidget(self.requestPushButton)
+                
+                # Create a horizontal layout with the button and loading indicator
+                request_h_layout = QHBoxLayout()
+                request_h_layout.addWidget(self.requestPushButton)
+                request_h_layout.addWidget(self.requestLoadingLabel)
+                request_h_layout.addStretch()
+                
+                # Add the horizontal layout back to the grid at the same position
+                request_grid.addLayout(request_h_layout, row, col)
+        
+        # Create loading indicator for From Layer tab
+        self.fromLayerLoadingLabel = QLabel("⏳ Processing...")
+        self.fromLayerLoadingLabel.setStyleSheet("""
+            QLabel {
+                color: #1565C0;
+                font-weight: bold;
+                padding: 5px;
+                background-color: #E3F2FD;
+                border: 1px solid #2196F3;
+                border-radius: 4px;
+            }
+        """)
+        self.fromLayerLoadingLabel.setVisible(False)
+        
+        # Get the grid layout from the From Layer tab
+        from_layer_grid = self.requestFilePushButton.parent().layout()
+        if isinstance(from_layer_grid, QtWidgets.QGridLayout):
+            # Find the button's position
+            button_index = from_layer_grid.indexOf(self.requestFilePushButton)
+            if button_index >= 0:
+                row, col, rowspan, colspan = from_layer_grid.getItemPosition(button_index)
+                
+                # Remove the button from the grid
+                from_layer_grid.removeWidget(self.requestFilePushButton)
+                
+                # Create a horizontal layout with the button and loading indicator
+                from_layer_h_layout = QHBoxLayout()
+                from_layer_h_layout.addWidget(self.requestFilePushButton)
+                from_layer_h_layout.addWidget(self.fromLayerLoadingLabel)
+                from_layer_h_layout.addStretch()
+                
+                # Add the horizontal layout back to the grid at the same position
+                from_layer_grid.addLayout(from_layer_h_layout, row, col)
 
     def setup_ermes_image(self):
         """Set up the ERMES image in the login tab welcome label"""
