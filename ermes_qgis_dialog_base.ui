@@ -43,7 +43,7 @@
         </sizepolicy>
        </property>
        <property name="currentIndex">
-        <number>1</number>
+        <number>3</number>
        </property>
        <widget class="QWidget" name="loginTab">
         <property name="mouseTracking">
@@ -287,8 +287,8 @@
              <rect>
               <x>0</x>
               <y>0</y>
-              <width>791</width>
-              <height>796</height>
+              <width>774</width>
+              <height>1236</height>
              </rect>
             </property>
             <layout class="QGridLayout" name="gridLayout_4">
@@ -601,9 +601,6 @@
                    <width>400</width>
                    <height>200</height>
                   </size>
-                 </property>
-                 <property name="toolTip">
-                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select dates for your analysis. Click on a date to set start/end dates for the temporal range&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                  </property>
                  <property name="palette">
                   <palette>
@@ -1057,6 +1054,9 @@
                  </property>
                  <property name="focusPolicy">
                   <enum>Qt::StrongFocus</enum>
+                 </property>
+                 <property name="toolTip">
+                  <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;Select dates for your analysis. Click on a date to set start/end dates for the temporal range&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                  </property>
                  <property name="layoutDirection">
                   <enum>Qt::LeftToRight</enum>
@@ -1567,6 +1567,9 @@
            </property>
            <property name="alternatingRowColors">
             <bool>true</bool>
+           </property>
+           <property name="selectionMode">
+            <enum>QAbstractItemView::SingleSelection</enum>
            </property>
            <property name="selectionBehavior">
             <enum>QAbstractItemView::SelectRows</enum>

@@ -340,13 +340,7 @@ class ErmesQGISDialog(QDockWidget):
             # Hide the vertical header (row numbers)
             self.jobsTableWidget.verticalHeader().setVisible(False)
 
-            # Enable selection
-            self.jobsTableWidget.setSelectionBehavior(
-                QtWidgets.QAbstractItemView.SelectRows
-            )
-            self.jobsTableWidget.setSelectionMode(
-                QtWidgets.QAbstractItemView.MultiSelection
-            )
+
 
     def setup_layer_type_list(self):
         """Setup the layer type list widget with images and descriptions"""
@@ -456,62 +450,52 @@ class ErmesQGISDialog(QDockWidget):
             self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
 
     def download_selected_jobs(self):
-        """Download and load selected jobs from the Jobs Table into QGIS"""
-        selected_rows = set()
-        for item in self.jobsTableWidget.selectedItems():
-            selected_rows.add(item.row())
-
-        if not selected_rows:
-            self.update_status("No jobs selected for download.", "warning")
+        """Download and load the selected job from the Jobs Table into QGIS"""
+        # Get the currently selected row
+        selected_items = self.jobsTableWidget.selectedItems()
+        
+        if not selected_items:
+            self.update_status("No job selected for download.", "warning")
             return
-
-        # Filter jobs that can be downloaded (end status with resource_url)
-        downloadable_jobs = []
-        non_downloadable_jobs = []
-
-        for row in selected_rows:
-            try:
-                # Get job data from the table
-                job_item = self.jobsTableWidget.item(row, 0)
-                if job_item:
-                    job_data = job_item.data(Qt.UserRole)
-                    job_id = job_data.get("id")
-                    job_status = job_data.get("status")
-                    resource_url = job_data.get("resource_url")
-
-                    if job_status == "end" and resource_url:
-                        downloadable_jobs.append((row, job_id))
-                    else:
-                        non_downloadable_jobs.append(job_id)
-
-            except Exception as e:
+        
+        # Get the first selected item (only one row can be selected)
+        row = selected_items[0].row()
+        
+        try:
+            # Get job data from the table
+            job_item = self.jobsTableWidget.item(row, 0)
+            if not job_item:
+                self.update_status("Error: Could not retrieve job data.", "error")
+                return
+            
+            job_data = job_item.data(Qt.UserRole)
+            job_id = job_data.get("id")
+            job_status = job_data.get("status")
+            resource_url = job_data.get("resource_url")
+            
+            # Check if job can be downloaded
+            if job_status != "end":
                 self.update_status(
-                    f"Internal error processing job from row {row}", "error"
+                    f"Job {job_id} cannot be downloaded yet. Current status: {job_status}",
+                    "warning"
                 )
-
-        # Show warning for non-downloadable jobs
-        if non_downloadable_jobs:
+                return
+            
+            if not resource_url:
+                self.update_status(
+                    f"Job {job_id} has no resource available for download.",
+                    "warning"
+                )
+                return
+            
+            # Download the job resource
+            self.update_status(f"Downloading job {job_id}...", "info")
+            self.download_job_resource(job_id)
+            
+        except Exception as e:
             self.update_status(
-                f"Warning: Jobs {non_downloadable_jobs} cannot be downloaded (not completed or no resource available).",
-                "warning",
+                f"Internal error processing job from row {row}: {e}", "error"
             )
-
-        if not downloadable_jobs:
-            self.update_status("No downloadable jobs selected.", "warning")
-            return
-
-        self.update_status(
-            f"Downloading {len(downloadable_jobs)} selected job(s)...", "info"
-        )
-
-        for row, job_id in downloadable_jobs:
-            try:
-                # Download the job resource
-                self.download_job_resource(job_id)
-            except Exception as e:
-                self.update_status(
-                    f"Internal error while downloading resource for job {job_id}", "error"
-                )
 
     def download_job_resource(self, job_id):
         """Download a specific job resource and load it into QGIS"""
