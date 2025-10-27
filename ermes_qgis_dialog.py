@@ -45,8 +45,8 @@ from qgis.core import (
 )
 from qgis.utils import iface
 from qgis.PyQt import uic, QtWidgets
-from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView, QDockWidget, QListWidgetItem, QProgressBar, QLabel, QVBoxLayout
-from qgis.PyQt.QtCore import QThread, QTimer, QSize
+from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView, QDockWidget, QListWidgetItem, QLabel
+from qgis.PyQt.QtCore import QThread, QTimer
 from PyQt5.QtGui import QPixmap, QIcon
 from qgis.core import QgsMapLayerProxyModel
 
@@ -62,25 +62,21 @@ from .workers.token_manager import TokenManager
 # Import the BoundingBoxWidget
 from .widgets.bbox_widget import RectangleMapTool
 
+# Import utility functions
+from .utils.date_utils import parse_date
+from .utils.config_loader import ConfigLoader
+from .utils.geometry_utils import (
+    transform_geometry_to_epsg4326,
+    create_geometry_from_rectangle,
+    unify_layer_geometries,
+    geometry_to_json,
+)
+
 import warnings
 
 warnings.filterwarnings("ignore")
 base_path = os.path.dirname(os.path.abspath(__file__))
 thumbnail_image = os.path.join(base_path, "images", "title.png")
-
-
-def parse_date(date: str) -> str:
-    """If a date string is set it parses it into a format YYYY-MM-DD. In case parsing fails None is returned.
-
-    :param date: A string describing a date
-    :return: A string in a format YYYY-MM-DD, an empty string, or None
-    """
-    if date == "":
-        return date
-    try:
-        return datetime.fromisoformat(date).isoformat()
-    except ValueError:
-        return None
 
 
 FORM_CLASS, _ = uic.loadUiType(
@@ -141,107 +137,33 @@ class ErmesQGISDialog(QDockWidget):
         self.jobs_worker = None
         self.jobs_timer = None
 
-        # Initialize plugin data
-        self._initialize_plugin_data()
-
-    def _initialize_plugin_data(self):
-        """Initialize plugin-specific data and settings"""
-        # Setup for API
-        self.active_time = None
-        self.api_base_url = "https://loki.linksfoundation.com/ermes-plugin"
-        self.username = None  # Will be set when user logs in
-        self.password = None  # Will be set when user logs in
-        self.access_token = None  # Will be set after successful login
-        self.token_manager = TokenManager(self.api_base_url)
-
         # Initialize tab state - disable all tabs except login since no token yet
         self.tabWidget.setTabEnabled(1, False)  # Request
         self.tabWidget.setTabEnabled(2, False)  # From Layer
         self.tabWidget.setTabEnabled(3, False)  # Jobs
         self.tabWidget.setCurrentIndex(0)  # Switch to Login tab
 
-        # Token validation timer
+        # Load configuration
+        self.config = ConfigLoader()
+
+        # Start Token validation timer
         self.token_timer = QTimer()
         self.token_timer.timeout.connect(self.check_token_validity)
-        self.token_timer.setInterval(60000)  # Check every minute
+        self.token_timer.setInterval(self.config.token_validation_interval_ms)
 
-        self.polygonLayerComboBox.setFilters(QgsMapLayerProxyModel.PolygonLayer)
-        self.rasterLayerComboBox.setFilters(QgsMapLayerProxyModel.RasterLayer)
+        # Initialize plugin data
+        self._initialize_plugin_data()
 
-        # Initialize BoundingBoxWidget
-        self.bboxWidget = None
-        self.rectangleMapTool = None
-        self.current_bbox = None  # Store current bounding box coordinates
+        # Initialize Token Manager
+        self.token_manager = TokenManager(self.api_base_url, self.config)
 
-        # Available pipelines with descriptions and images
-        self.pipeline_info = {
-            "Sentinel-1 image": {
-                "pipeline": "flood_satellite_image_sentinel_1",
-                "description": "Download SAR (VV and VH polarization) imagery from Sentinel-1",
-                "image": "sentinel1_icon.png"
-            },
-            "Sentinel-2 image": {
-                "pipeline": "fire_satellite_image_sentinel_2",
-                "description": "Download optical (B1-B12) imagery from Sentinel-2",
-                "image": "sentinel2_icon.png"
-            },
-            "Burned area delineation": {
-                "pipeline": "fire_burned_area_delineation",
-                "description": "Detect and map burned areas from Sentinel-2 imagery",
-                "image": "burned_area_icon.png"
-            },
-            "Burn Severity estimation": {
-                "pipeline": "fire_burned_area_severity_estimation",
-                "description": "Estimate the severity of burned areas using Sentinel-2 imagery",
-                "image": "burn_severity_icon.png"
-            },
-            "Active Flames and Smoke detection": {
-                "pipeline": "fire_active_flames_and_smoke_detection",
-                "description": "Detect active fires fronts and smoke",
-                "image": "active_fire_icon.png"
-            },
-            "Waterbody delineation": {
-                "pipeline": "flood_post_waterbody_delineation",
-                "description": "Map water bodies and flooded areas from Sentinel-1 imagery",
-                "image": "waterbody_icon.png"
-            },
-            "Water depth estimation": {
-                "pipeline": "flood_post_waterdepth_estimation",
-                "description": "Estimate water depth in flooded regions from Sentinel-1 imagery and DTM",
-                "image": "water_depth_icon.png"
-            },
-        }
-        
-        # Keep backward compatibility with old pipeline_map
-        self.pipeline_map = {k: v["pipeline"] for k, v in self.pipeline_info.items()}
-
-        # Available image types
-        self.image_type_map = {
-            "Sentinel-2 image": "sentinel_2",
-            "Sentinel-1 image": "sentinel_1",
-        }
-        # Available styles
-        self.style_root = "styles"
-        self.style_map = {
-            "fire_burned_area_delineation": "fire_burned_area_delineation.qml",
-            "fire_burned_area_severity_estimation": "fire_burned_area_severity_estimation.qml",
-            "fire_active_flames_and_smoke_detection": "fire_active_flames_and_smoke_detection.qml",
-            "flood_post_waterbody_delineation": "flood_post_waterbody_delineation.qml",
-            "fire_satellite_image_sentinel_2": "fire_satellite_image_sentinel_2.qml",
-            "flood_satellite_image_sentinel_1": "flood_satellite_image_sentinel_1.qml",
-            "flood_post_waterdepth_estimation": "flood_post_waterdepth_estimation.qml",
-        }
         # Set up the ERMES image in the login tab
         self.setup_ermes_image()
         # Setup jobs table
         self.setup_jobs_table()
         # Setup layer type list widget
         self.setup_layer_type_list()
-
-        # Initialize status messages list
-        self.status_messages = []
-        self._cached_messages = []
-
+        
         # Connect UI signals to methods
         # Login
         self.loginPushButton.clicked.connect(self.login)
@@ -280,7 +202,6 @@ class ErmesQGISDialog(QDockWidget):
 
         # Jobs tab
         self.downloadJobButton.clicked.connect(self.download_selected_jobs)
-        self.deleteJobButton.clicked.connect(self.delete_selected_jobs)
         self.refreshJobsButton.clicked.connect(self.refresh_jobs_table)
 
         # Initial validation
@@ -299,17 +220,45 @@ class ErmesQGISDialog(QDockWidget):
         # Setup loading indicators for the "Get Layer" buttons
         self.setup_loading_indicators()
 
-    def get_credentials_file_path(self):
-        """Get the path to the credentials file"""
-        # Store credentials in the plugin directory
-        plugin_dir = os.path.dirname(__file__)
-        return os.path.join(plugin_dir, ".credentials")
+    def _initialize_plugin_data(self):
+        """Initialize plugin-specific data and settings"""
+        # Setup for API
+        self.active_time = None
+        
+        # Load configuration values
+        self.api_base_url = self.config.api_base_url
+        self.pipeline_info = self.config.get_pipeline_info()
+        self.pipeline_map = self.config.get_pipeline_map()
+        self.image_type_map = self.config.image_type_map
+        self.style_root = self.config.style_root
+        self.style_map = self.config.style_map
+        
+        self.username = None  # Will be set when user logs in
+        self.password = None  # Will be set when user logs in
+        self.access_token = None  # Will be set after successful login
+        
+
+        # Initialize layer type list widget (needed since it doesn't work when doing it in the UI file)
+        self.polygonLayerComboBox.setFilters(QgsMapLayerProxyModel.PolygonLayer)
+        self.rasterLayerComboBox.setFilters(QgsMapLayerProxyModel.RasterLayer)
+
+        # Initialize data for BoundingBoxWidget
+        self.bboxWidget = None
+        self.rectangleMapTool = None
+        self.current_bbox = None  # Store current bounding box coordinates
+
+        # Initialize status messages list
+        self.status_messages = []
+        self._cached_messages = []
+
+        self.credentials_path = os.path.join( os.path.dirname(__file__), self.config.credentials_file)
+
+    # Credentials handling methods
     
     def save_credentials(self, username, password):
         """Save credentials to a file with basic encoding"""
         try:
-            credentials_path = self.get_credentials_file_path()
-            
+        
             # Encode credentials (basic obfuscation, not secure encryption)
             encoded_username = base64.b64encode(username.encode()).decode()
             encoded_password = base64.b64encode(password.encode()).decode()
@@ -319,7 +268,7 @@ class ErmesQGISDialog(QDockWidget):
                 "password": encoded_password
             }
             
-            with open(credentials_path, 'w') as f:
+            with open(self.credentials_path, 'w') as f:
                 json.dump(credentials, f)
                 
         except Exception as e:
@@ -329,12 +278,10 @@ class ErmesQGISDialog(QDockWidget):
     def load_credentials(self):
         """Load credentials from file if it exists"""
         try:
-            credentials_path = self.get_credentials_file_path()
-            
-            if not os.path.exists(credentials_path):
+            if not os.path.exists(self.credentials_path):
                 return
             
-            with open(credentials_path, 'r') as f:
+            with open(self.credentials_path, 'r') as f:
                 credentials = json.load(f)
             
             # Decode credentials
@@ -354,12 +301,13 @@ class ErmesQGISDialog(QDockWidget):
     def clear_saved_credentials(self):
         """Delete the saved credentials file"""
         try:
-            credentials_path = self.get_credentials_file_path()
-            if os.path.exists(credentials_path):
-                os.remove(credentials_path)
+            if os.path.exists(self.credentials_path):
+                os.remove(self.credentials_path)
         except Exception as e:
             print(f"Could not delete credentials file: {e}")
 
+    # UI setup methods
+    
     def setup_jobs_table(self):
         """Setup the jobs table with appropriate columns"""
         # Assuming the table is named jobsTableWidget
@@ -413,7 +361,7 @@ class ErmesQGISDialog(QDockWidget):
                 item = QListWidgetItem()
                 
                 # Set the icon (look in plugin root directory)
-                icon_path = os.path.join(base_path,"images", layer_data["image"])
+                icon_path = os.path.join(base_path, self.config.images_directory, layer_data["image"])
                 if os.path.exists(icon_path):
                     item.setIcon(QIcon(icon_path))
                 else:
@@ -453,7 +401,7 @@ class ErmesQGISDialog(QDockWidget):
         self.jobs_thread = QThread()
         # Create a jobs worker
         self.jobs_worker = JobsWorker(
-            api_base_url=self.api_base_url, access_token=self.access_token
+            api_base_url=self.api_base_url, access_token=self.access_token, config=self.config
         )
 
         # Move worker to the thread
@@ -508,7 +456,7 @@ class ErmesQGISDialog(QDockWidget):
             self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
 
     def download_selected_jobs(self):
-        """Download and load selected jobs into QGIS"""
+        """Download and load selected jobs from the Jobs Table into QGIS"""
         selected_rows = set()
         for item in self.jobsTableWidget.selectedItems():
             selected_rows.add(item.row())
@@ -562,7 +510,7 @@ class ErmesQGISDialog(QDockWidget):
                 self.download_job_resource(job_id)
             except Exception as e:
                 self.update_status(
-                    f"Internal error downloading resource for job {job_id}", "error"
+                    f"Internal error while downloading resource for job {job_id}", "error"
                 )
 
     def download_job_resource(self, job_id):
@@ -570,7 +518,7 @@ class ErmesQGISDialog(QDockWidget):
 
         try:
             # First, get the job details to retrieve the datatype_id
-            job_url = f"{self.api_base_url}/jobs/{job_id}"
+            job_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_detail'].format(job_id=job_id)}"
             headers = {"Authorization": f"Bearer {self.access_token}"}
 
             job_response = requests.get(job_url, headers=headers)
@@ -580,8 +528,7 @@ class ErmesQGISDialog(QDockWidget):
             # Extract datatype_id from the job data
             datatype_id = job_data.get("body", {}).get("datatype_id", None)
 
-            # Use the same download logic as in MainWorker
-            retrieve_url = f"{self.api_base_url}/retrieve/{job_id}"
+            retrieve_url = f"{self.api_base_url}{self.config.api_endpoints['retrieve'].format(job_id=job_id)}"
 
             self.update_status(f"Downloading job {job_id}...", "info")
 
@@ -598,12 +545,12 @@ class ErmesQGISDialog(QDockWidget):
 
                 # Use a temporary directory to save the file
                 with tempfile.TemporaryDirectory(
-                    prefix=f"qgis_ermes_{job_id}_"
+                    prefix=f"{self.config.temp_dir_prefix}{job_id}_"
                 ) as temp_dir:
                     cache_path = os.path.join(temp_dir, filename)
 
                     with open(cache_path, "wb") as f:
-                        for chunk in response.iter_content(chunk_size=8192):
+                        for chunk in response.iter_content(chunk_size=self.config.processing_chunk_size):
                             if chunk:
                                 f.write(chunk)
 
@@ -614,26 +561,6 @@ class ErmesQGISDialog(QDockWidget):
         except Exception as e:
             self.update_status(f"Internal error downloading job {job_id}", "error")
 
-    def delete_selected_jobs(self):
-        """Mock delete functionality for selected jobs"""
-        selected_rows = set()
-        for item in self.jobsTableWidget.selectedItems():
-            selected_rows.add(item.row())
-
-        if not selected_rows:
-            self.update_status("No jobs selected for deletion.", "warning")
-            return
-
-        # Mock behavior - just show a message
-        self.update_status(
-            f"Mock: Would delete {len(selected_rows)} selected job(s). This functionality is not yet implemented.",
-            "info",
-        )
-
-        # In a real implementation, you would:
-        # 1. Call the API to delete the jobs
-        # 2. Remove the rows from the table
-        # 3. Update the jobs list
 
     def refresh_jobs_table(self):
         """Refreshes the jobs table by re-fetching jobs from the API."""
@@ -652,7 +579,7 @@ class ErmesQGISDialog(QDockWidget):
         try:
             # Call the API directly to get jobs
             headers = {"Authorization": f"Bearer {self.access_token}"}
-            jobs_url = f"{self.api_base_url}/jobs/"
+            jobs_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_list']}"
 
             response = requests.get(jobs_url, headers=headers)
             response.raise_for_status()
@@ -729,7 +656,7 @@ class ErmesQGISDialog(QDockWidget):
         self.loginInfoLabel.setText("Logging in...")
 
         try:
-            auth_url = f"{self.api_base_url}/auth/login"
+            auth_url = f"{self.api_base_url}{self.config.api_endpoints['login']}"
             auth_data = {
                 "username": username,
                 "password": password,
@@ -811,20 +738,95 @@ class ErmesQGISDialog(QDockWidget):
             self.loginInfoLabel.setText(f"Login failed: Internal error {e}")
             self.loginPushButton.setEnabled(True)
 
+    def get_aoi_geometry(self):
+        """
+        Get the Area of Interest (AOI) geometry based on the selected method.
+        
+        Returns the geometry in EPSG:4326 projection.
+        
+        :return: Tuple (QgsGeometry, error_message) - Returns (None, error_msg) on error
+        """
+        if self.drawRectangleRadioButton.isChecked():
+            return self._get_geometry_from_drawn_rectangle()
+        elif self.selectPolygonRadioButton.isChecked():
+            return self._get_geometry_from_polygon_layer()
+        else:  # useMapExtentRadioButton is checked
+            return self._get_geometry_from_map_extent()
+    
+    def _get_geometry_from_drawn_rectangle(self):
+        """Get geometry from drawn rectangle."""
+        if not self.current_bbox:
+            return None, "Please draw a rectangle first."
+        
+        # Create geometry from bbox coordinates (already in EPSG:4326 from bbox_widget)
+        minx, miny, maxx, maxy = self.current_bbox
+        geometry = create_geometry_from_rectangle(minx, miny, maxx, maxy)
+        
+        return geometry, None
+    
+    def _get_geometry_from_polygon_layer(self):
+        """Get geometry from selected polygon layer."""
+        selected_layer = self.polygonLayerComboBox.currentLayer()
+        
+        if not isinstance(selected_layer, QgsVectorLayer):
+            return None, "Please select a valid polygon layer."
+        
+        # Unify all geometries from the layer
+        unified_geom, error = unify_layer_geometries(selected_layer)
+        if error:
+            return None, error
+        
+        # Transform geometry to EPSG:4326 if needed
+        layer_crs = selected_layer.crs()
+        transformed_geom, was_transformed, error = transform_geometry_to_epsg4326(
+            unified_geom, layer_crs
+        )
+        
+        if error:
+            return None, f"Error transforming geometry: {error}"
+        
+        if was_transformed:
+            self.update_status(
+                f"Transformed geometry from {layer_crs.authid()} to EPSG:4326",
+                "info",
+            )
+        
+        return transformed_geom, None
+    
+    def _get_geometry_from_map_extent(self):
+        """Get geometry from current map extent."""
+        canvas = iface.mapCanvas()
+        extent = canvas.extent()
+        canvas_crs = canvas.mapSettings().destinationCrs()
+        
+        # Create geometry from extent
+        geometry = QgsGeometry.fromRect(extent)
+        
+        # Transform to EPSG:4326 if needed
+        transformed_geom, was_transformed, error = transform_geometry_to_epsg4326(
+            geometry, canvas_crs
+        )
+        
+        if error:
+            return None, f"Error transforming map extent: {error}"
+        
+        if was_transformed:
+            self.update_status(
+                f"Using current map extent (transformed from {canvas_crs.authid()} to EPSG:4326)",
+                "info",
+            )
+        else:
+            self.update_status("Using current map extent as area of interest", "info")
+        
+        return transformed_geom, None
+
     def send_request(self):
         """
         Sends a request to the API with the selected parameters.
 
         This function collects and validates the user inputs, constructs a message containing
-        the selected polygon layer's geometry, the chosen pipeline, and the time range. It
-        then sends this message to the API.
-
-        The process includes:
-
-        - Validating the selected polygon layer and its features.
-        - Constructing a unified geometry from all features in the layer.
-        - Constructing a message dictionary with the pipeline, geometry, and time range.
-        - Publishing the message to the API.
+        the selected geometry, the chosen pipeline, and the time range. It then sends this 
+        message to the API.
 
         If any error occurs during this process, it updates the status with an error message.
 
@@ -853,88 +855,13 @@ class ErmesQGISDialog(QDockWidget):
         start_dt = self.startDateLineEdit.text()
         end_dt = self.endDateLineEdit.text()
 
-        # Get geometry based on AOI method
-        if self.drawRectangleRadioButton.isChecked():
-            # Use drawn rectangle
-            if not self.current_bbox:
-                self.update_status("Error: Please draw a rectangle first.", "error")
-                return
+        # Get AOI geometry
+        unified_qgs_geom, error = self.get_aoi_geometry()
+        if error:
+            self.update_status(f"Error: {error}", "error")
+            return
 
-            # Create geometry from bbox coordinates (already in EPSG:4326 from bbox_widget)
-            minx, miny, maxx, maxy = self.current_bbox
-
-            rect = QgsRectangle(minx, miny, maxx, maxy)
-            unified_qgs_geom = QgsGeometry.fromRect(rect)
-            
-        elif self.selectPolygonRadioButton.isChecked():
-            # Use selected polygon layer
-            selected_layer = self.polygonLayerComboBox.currentLayer()
-            if not isinstance(selected_layer, QgsVectorLayer):
-                self.update_status(
-                    "Error: Please select a valid polygon layer.", "error"
-                )
-                return
-
-            all_geoms = [feature.geometry() for feature in selected_layer.getFeatures()]
-            if not all_geoms:
-                self.update_status(
-                    "Error: The selected layer has no features.", "error"
-                )
-                return
-
-            unified_qgs_geom = QgsGeometry.unaryUnion(all_geoms)
-            if unified_qgs_geom.isEmpty():
-                self.update_status(
-                    "Error: Could not create a valid geometry from the layer.", "error"
-                )
-                return
-
-            # Transform geometry to EPSG:4326 if needed
-            layer_crs = selected_layer.crs()
-            target_crs = QgsCoordinateReferenceSystem("EPSG:4326")
-
-            if layer_crs != target_crs:
-                try:
-                    transform = QgsCoordinateTransform(
-                        layer_crs, target_crs, QgsProject.instance()
-                    )
-                    unified_qgs_geom.transform(transform)
-                    self.update_status(
-                        f"Transformed geometry from {layer_crs.authid()} to EPSG:4326",
-                        "info",
-                    )
-                except Exception as e:
-                    self.update_status(f"Error transforming geometry: {e}", "error")
-                    return
-                    
-        else:  # useMapExtentRadioButton is checked
-            # Use current map extent
-            canvas = iface.mapCanvas()
-            extent = canvas.extent()
-            canvas_crs = canvas.mapSettings().destinationCrs()
-            target_crs = QgsCoordinateReferenceSystem("EPSG:4326")
-            
-            # Create geometry from extent
-            unified_qgs_geom = QgsGeometry.fromRect(extent)
-            
-            # Transform to EPSG:4326 if needed
-            if canvas_crs != target_crs:
-                try:
-                    transform = QgsCoordinateTransform(
-                        canvas_crs, target_crs, QgsProject.instance()
-                    )
-                    unified_qgs_geom.transform(transform)
-                    self.update_status(
-                        f"Using current map extent (transformed from {canvas_crs.authid()} to EPSG:4326)",
-                        "info",
-                    )
-                except Exception as e:
-                    self.update_status(f"Error transforming map extent: {e}", "error")
-                    return
-            else:
-                self.update_status("Using current map extent as area of interest", "info")
-
-        geometry_str = unified_qgs_geom.asJson()
+        geometry_str = geometry_to_json(unified_qgs_geom)
 
         try:
             geometry = json.loads(geometry_str)
@@ -950,7 +877,7 @@ class ErmesQGISDialog(QDockWidget):
             headers = {"Authorization": f"Bearer {self.access_token}"}
 
             # Create job request
-            job_url = f"{self.api_base_url}/jobs/create"
+            job_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_create']}"
             job_data = {
                 "datatype_id": self.pipeline_map[pipeline_text],
                 "geometry": geometry,
@@ -1024,6 +951,7 @@ class ErmesQGISDialog(QDockWidget):
                 api_base_url=self.api_base_url,
                 access_token=self.access_token,
                 dialog_ref=self,
+                config=self.config,
             )
 
             # Add the task to QGIS task manager
@@ -1107,6 +1035,7 @@ class ErmesQGISDialog(QDockWidget):
             username=self.username,
             password=self.password,
             job_id=job_id,
+            config=self.config,
         )
 
         # Move worker to the thread
@@ -1207,8 +1136,7 @@ class ErmesQGISDialog(QDockWidget):
         Unzips an archive and loads all contained .tif files into a new layer group, applying a style to each.
         """
         # Use a temporary directory that is automatically cleaned up
-
-        extract_dir = tempfile.mkdtemp(prefix="qgis_ermes_")
+        extract_dir = tempfile.mkdtemp(prefix=self.config.temp_dir_prefix)
         self.temp_dirs_to_clean.append(extract_dir)
 
         try:

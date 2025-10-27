@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import tempfile
 from PyQt5.QtCore import QObject, pyqtSignal
 from .token_manager import TokenManager
 
@@ -26,6 +27,7 @@ class MainWorker(QObject):
         username: str,
         password: str,
         job_id: int,
+        config,
     ):
         super().__init__()
         self.api_base_url = api_base_url
@@ -34,7 +36,14 @@ class MainWorker(QObject):
         self.job_id = job_id
         self.access_token = None
         self.is_running = True
-        self.token_manager = TokenManager(api_base_url)
+        self.config = config
+        self.token_manager = TokenManager(api_base_url, config)
+        
+        # Get polling intervals from config
+        self.polling_interval = self.config.polling_interval_seconds
+        self.error_sleep_seconds = self.config.polling_error_sleep_seconds
+        self.chunk_size = self.config.processing_chunk_size
+        self.cache_dir_name = self.config.cache_dir_name
 
     def _authenticate(self):
         """
@@ -49,7 +58,7 @@ class MainWorker(QObject):
             return {"Authorization": f"Bearer {self.access_token}"}
 
         # Token is expired or doesn't exist, get a new one
-        auth_url = f"{self.api_base_url}/auth/login"
+        auth_url = f"{self.api_base_url}{self.config.api_endpoints['login']}"
         data = {
             "username": self.username,
             "password": self.password,
@@ -74,7 +83,7 @@ class MainWorker(QObject):
         :raises HTTPError: If the request fails.
         """
         headers = self._authenticate()
-        status_url = f"{self.api_base_url}/jobs/{self.job_id}"
+        status_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_detail'].format(job_id=self.job_id)}"
 
         response = requests.get(status_url, headers=headers)
         response.raise_for_status()
@@ -89,7 +98,7 @@ class MainWorker(QObject):
         :return: The local cache path where the downloaded resource is saved.
         :raises HTTPError: If the HTTP request to the URL fails.
         """
-        retrieve_url = f"{self.api_base_url}/retrieve/{self.job_id}"
+        retrieve_url = f"{self.api_base_url}{self.config.api_endpoints['retrieve'].format(job_id=self.job_id)}"
         self.status_updated.emit(
             f"Job {self.job_id} status: success - Request completed, downloading layer"
         )
@@ -107,12 +116,13 @@ class MainWorker(QObject):
                 # fallback: try to get from URL or use job_id.zip
                 filename = f"{self.job_id}.zip"
 
-            cache_dir = f"./tmp/{self.job_id}"
+            # Use system temp directory to avoid permission issues
+            cache_dir = os.path.join(tempfile.gettempdir(), self.cache_dir_name, str(self.job_id))
             os.makedirs(cache_dir, exist_ok=True)
             cache_path = os.path.join(cache_dir, filename)
 
             with open(cache_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
+                for chunk in response.iter_content(chunk_size=self.chunk_size):
                     if chunk:
                         f.write(chunk)
 
@@ -157,7 +167,7 @@ class MainWorker(QObject):
                             self.status_updated.emit(
                                 f"Job {self.job_id} Warning: {result}"
                             )
-                            time.sleep(5)
+                            time.sleep(self.error_sleep_seconds)
                         else:
                             self.error.emit(
                                 f"Job {self.job_id} Error: {status_code} - {result}"
@@ -169,7 +179,7 @@ class MainWorker(QObject):
                         self.status_updated.emit(
                             f"Job {self.job_id} status: {status} - {result} "
                         )
-                        time.sleep(1)  # Poll every 5 seconds
+                        time.sleep(self.polling_interval)
                     else:
                         self.error.emit(
                             f"Job {self.job_id} Unknown job status: {status}"

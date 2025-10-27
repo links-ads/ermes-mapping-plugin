@@ -14,18 +14,24 @@ class TokenManager(QObject):
     token_expired = pyqtSignal()  # Emitted when token is expired
     token_refresh_needed = pyqtSignal()  # Emitted when token needs refresh
 
-    def __init__(self, api_base_url: str):
+    def __init__(self, api_base_url: str, config):
         super().__init__()
         self.api_base_url = api_base_url
+        self.config = config
         self.access_token = None
         self.token_created_at = None
-        self.token_lifetime_minutes = 6000  # Default token lifetime in minutes
+        
+        # Get token lifetime from config
+        self.token_lifetime_minutes = self.config.token_lifetime_minutes
+        self.expiration_buffer_minutes = self.config.token_expiration_buffer_minutes
+        self.api_validation_timeout = self.config.token_api_validation_timeout
 
-    def set_token(self, access_token: str, lifetime_minutes: int = 6000):
+    def set_token(self, access_token: str, lifetime_minutes: int = None):
         """Set the access token and track its creation time"""
         self.access_token = access_token
         self.token_created_at = datetime.now()
-        self.token_lifetime_minutes = lifetime_minutes
+        if lifetime_minutes is not None:
+            self.token_lifetime_minutes = lifetime_minutes
 
     def is_token_expired(self) -> bool:
         """Check if the current token is expired based on age"""
@@ -36,8 +42,8 @@ class TokenManager(QObject):
         token_age = datetime.now() - self.token_created_at
         token_lifetime = timedelta(minutes=self.token_lifetime_minutes)
 
-        # Add a 5-minute buffer to avoid edge cases
-        buffer_time = timedelta(minutes=5)
+        # Add a buffer to avoid edge cases
+        buffer_time = timedelta(minutes=self.expiration_buffer_minutes)
         return token_age >= (token_lifetime - buffer_time)
 
     def is_token_valid(self) -> bool:
@@ -66,8 +72,8 @@ class TokenManager(QObject):
         try:
             headers = {"Authorization": f"Bearer {self.access_token}"}
             # Use a lightweight endpoint to test token validity
-            test_url = f"{self.api_base_url}/jobs/"
-            response = requests.get(test_url, headers=headers, timeout=10)
+            test_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_list']}"
+            response = requests.get(test_url, headers=headers, timeout=self.api_validation_timeout)
 
             if response.status_code == 401:
                 # Token is invalid/expired

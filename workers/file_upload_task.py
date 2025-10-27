@@ -23,6 +23,7 @@ class FileUploadTask(QgsTask):
         api_base_url,
         access_token,
         dialog_ref,
+        config,
     ):
         super().__init__(description, QgsTask.CanCancel)
         self.file_path = file_path
@@ -31,11 +32,12 @@ class FileUploadTask(QgsTask):
         self.api_base_url = api_base_url
         self.access_token = access_token
         self.dialog_ref = dialog_ref
+        self.config = config
         self.result_path = None
         self.error_message = None
 
         # Initialize token manager
-        self.token_manager = TokenManager(api_base_url)
+        self.token_manager = TokenManager(api_base_url, config)
         self.token_manager.set_token(access_token)
 
     def _authenticate(self):
@@ -69,7 +71,7 @@ class FileUploadTask(QgsTask):
                 return False  # Error already set
 
             # Prepare the API endpoint and parameters
-            job_url = f"{self.api_base_url}/jobs/create/from_file"
+            job_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_create_from_file']}"
             params = {
                 "datatype_id": self.datatype_id,
                 "image_type": self.image_type,

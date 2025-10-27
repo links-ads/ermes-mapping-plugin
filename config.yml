@@ -1,0 +1,131 @@
+# -*- coding: utf-8 -*-
+# ERMES QGIS Plugin Configuration File
+# This file contains all configurable settings for the plugin
+
+# API Configuration
+api:
+  base_url: "https://loki.linksfoundation.com/ermes-plugin"
+  
+  # API Endpoints
+  endpoints:
+    login: "/auth/login"
+    jobs_create: "/jobs/create"
+    jobs_create_from_file: "/jobs/create/from_file"
+    jobs_list: "/jobs/"
+    jobs_detail: "/jobs/{job_id}"
+    retrieve: "/retrieve/{job_id}"
+
+# Token Management Configuration
+token:
+  # Token lifetime in minutes (default: 100 hours)
+  lifetime_minutes: 6000
+  
+  # Validation check interval in milliseconds (default: 1 minute)
+  validation_interval_ms: 60000
+  
+  # Buffer time before expiration (in minutes) to prevent edge cases
+  expiration_buffer_minutes: 5
+  
+  # API validation timeout in seconds
+  api_validation_timeout: 10
+
+# Polling Configuration
+polling:
+  # Poll interval in seconds
+  interval_seconds: 1
+  
+  # Sleep time on error before retry (in seconds)
+  error_sleep_seconds: 5
+
+# Pipeline Definitions
+# Each pipeline entry contains:
+# - pipeline: The pipeline identifier
+# - description: Human-readable description
+# - image: Icon filename in the images/ directory
+pipelines:
+  - name: "Sentinel-1 image"
+    pipeline: "flood_satellite_image_sentinel_1"
+    description: "Download SAR (VV and VH polarization) imagery from Sentinel-1"
+    image: "sentinel1_icon.png"
+  
+  - name: "Sentinel-2 image"
+    pipeline: "fire_satellite_image_sentinel_2"
+    description: "Download optical (B1-B12) imagery from Sentinel-2"
+    image: "sentinel2_icon.png"
+  
+  - name: "Burned area delineation"
+    pipeline: "fire_burned_area_delineation"
+    description: "Detect and map burned areas from Sentinel-2 imagery"
+    image: "burned_area_icon.png"
+  
+  - name: "Burn Severity estimation"
+    pipeline: "fire_burned_area_severity_estimation"
+    description: "Estimate the severity of burned areas using Sentinel-2 imagery"
+    image: "burn_severity_icon.png"
+  
+  - name: "Active Flames and Smoke detection"
+    pipeline: "fire_active_flames_and_smoke_detection"
+    description: "Detect active fires fronts and smoke"
+    image: "active_fire_icon.png"
+  
+  - name: "Waterbody delineation"
+    pipeline: "flood_post_waterbody_delineation"
+    description: "Map water bodies and flooded areas from Sentinel-1 imagery"
+    image: "waterbody_icon.png"
+  
+  - name: "Water depth estimation"
+    pipeline: "flood_post_waterdepth_estimation"
+    description: "Estimate water depth in flooded regions from Sentinel-1 imagery and DTM"
+    image: "water_depth_icon.png"
+
+# Image Type Mapping
+# Maps display names to internal image type identifiers
+image_types:
+  "Sentinel-2 image": "sentinel_2"
+  "Sentinel-1 image": "sentinel_1"
+
+# Style Configuration
+styles:
+  # Root directory for style files (relative to plugin root)
+  root_directory: "styles"
+  
+  # Mapping of pipeline identifiers to QML style files
+  mappings:
+    "fire_burned_area_delineation": "fire_burned_area_delineation.qml"
+    "fire_burned_area_severity_estimation": "fire_burned_area_severity_estimation.qml"
+    "fire_active_flames_and_smoke_detection": "fire_active_flames_and_smoke_detection.qml"
+    "flood_post_waterbody_delineation": "flood_post_waterbody_delineation.qml"
+    "fire_satellite_image_sentinel_2": "fire_satellite_image_sentinel_2.qml"
+    "flood_satellite_image_sentinel_1": "flood_satellite_image_sentinel_1.qml"
+    "flood_post_waterdepth_estimation": "flood_post_waterdepth_estimation.qml"
+
+# File Path Configuration
+paths:
+  # Credentials file name (stored in plugin directory)
+  credentials_file: ".credentials"
+  
+  # Base directory for images (relative to plugin root)
+  images_directory: "images"
+
+# UI Configuration
+ui:
+  # Default tab to show on startup
+  default_tab_index: 0
+  
+  # Enable/disable tabs by default (1 = Request, 2 = From Layer, 3 = Jobs)
+  tab_states:
+    - enabled: false  # Request tab
+    - enabled: false  # From Layer tab
+    - enabled: false  # Jobs tab
+
+# File Processing Configuration
+processing:
+  # Chunk size for file uploads/downloads
+  chunk_size: 8192
+  
+  # Temporary file prefix
+  temp_dir_prefix: "qgis_ermes_"
+  
+  # Cache directory name in system temp
+  cache_dir_name: "ermes_qgis"
+
