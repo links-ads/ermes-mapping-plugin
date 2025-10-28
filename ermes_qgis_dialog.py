@@ -139,9 +139,9 @@ class ErmesQGISDialog(QDockWidget):
         self.temp_dirs_to_clean = []
         QgsApplication.instance().aboutToQuit.connect(self.cleanup_temp_dirs)
 
-        # Worker utils
-        self.thread = None
-        self.worker = None
+        # Worker utils - changed to lists to support multiple concurrent jobs
+        self.threads = []  # List of threads monitoring jobs
+        self.workers = []  # List of workers monitoring jobs
 
         # Jobs tab worker utils
         self.jobs_thread = None
@@ -494,6 +494,17 @@ class ErmesQGISDialog(QDockWidget):
             self.jobsTableWidget.setRowCount(0)
 
     # ------------------------------------------------------------------------------------------------
+    # Helper methods for job monitoring
+    # ------------------------------------------------------------------------------------------------
+    def has_active_jobs(self):
+        """Check if any jobs are currently being monitored"""
+        # Clean up any finished threads first
+        self.threads = [t for t in self.threads if t.isRunning()]
+        self.workers = [w for w in self.workers if not w.property('finished')]
+        
+        return len(self.threads) > 0
+    
+    # ------------------------------------------------------------------------------------------------
     # Jobs Tab
     # ------------------------------------------------------------------------------------------------
     def setup_jobs_table(self):
@@ -616,9 +627,6 @@ class ErmesQGISDialog(QDockWidget):
         try:
             description = f"Downloading job {job_id}"
             
-            # Set current job ID for logging
-            self.current_job_id = job_id
-            
             # Create the download task
             download_task = JobDownloadTask(
                 description=description,
@@ -633,16 +641,15 @@ class ErmesQGISDialog(QDockWidget):
             task_manager = QgsApplication.taskManager()
             task_manager.addTask(download_task)
 
-            # Connect signals for safe communication
-            download_task.status_update.connect(self.update_status)
+            # Connect signals for safe communication - use lambda to bind job_id
+            download_task.status_update.connect(lambda msg, lvl="info": self.update_status_for_job(job_id, msg, lvl))
             download_task.download_completed.connect(self.on_job_download_completed)
             download_task.download_failed.connect(self.on_job_download_failed)
 
-            self.update_status(f"Starting download for job {job_id}...", "info")
+            self.update_status_for_job(job_id, f"Starting download for job {job_id}...", "info")
 
         except Exception as e:
             self.update_status(f"Error starting job download: {e}", "error")
-            self.current_job_id = None
 
     def refresh_jobs_table(self):
         """Refreshes the jobs table by re-fetching jobs from the API."""
@@ -685,6 +692,10 @@ class ErmesQGISDialog(QDockWidget):
         """Setup the layer type list widget with images and descriptions"""
         if hasattr(self, "layerTypeListWidget"):
             self.layerTypeListWidget.clear()
+            
+            # Enable multi-selection
+            from PyQt5.QtWidgets import QAbstractItemView
+            self.layerTypeListWidget.setSelectionMode(QAbstractItemView.MultiSelection)
             
             # Get the base path for images (plugin root directory)
             base_path = os.path.dirname(__file__)
@@ -1019,6 +1030,8 @@ class ErmesQGISDialog(QDockWidget):
         the selected geometry, the chosen pipeline, and the time range. It then sends this 
         message to the API.
 
+        If multiple layer types are selected, it creates multiple jobs and monitors them all.
+
         If any error occurs during this process, it updates the status with an error message.
 
         :raises Exception: If an error occurs during message sending or connection setup.
@@ -1029,10 +1042,10 @@ class ErmesQGISDialog(QDockWidget):
             self.update_status("Error: Please login before making a request.", "error")
             return
 
-        # Check if a job is already running
-        if self.thread is not None and self.thread.isRunning():
+        # Check if any jobs are currently running
+        if self.has_active_jobs():
             self.update_validation_status(
-                "Cannot start a new job while another job is already running and being monitored.",
+                "Cannot start new jobs while other jobs are already running and being monitored.",
                 "warning"
             )
             return
@@ -1044,13 +1057,12 @@ class ErmesQGISDialog(QDockWidget):
             return
 
         # Retrieve user inputs
-        # Get selected layer from list widget
+        # Get selected layers from list widget
         selected_items = self.layerTypeListWidget.selectedItems()
         if not selected_items:
-            self.update_validation_status("Please select a layer type.", "error")
+            self.update_validation_status("Please select at least one layer type.", "error")
             return
         
-        pipeline_text = selected_items[0].data(Qt.UserRole)
         start_dt = self.startDateLineEdit.text()
         end_dt = self.endDateLineEdit.text()
 
@@ -1068,35 +1080,42 @@ class ErmesQGISDialog(QDockWidget):
             self.update_validation_status(f"Error parsing geometry JSON: {e}", "error")
             return
 
-        # Start Processing
+        # Start Processing - create a job for each selected layer type
         try:
-            self.update_status("Sending request to API...")
+            self.update_status(f"Sending {len(selected_items)} request(s) to API...")
 
             # Use the saved access token for authentication
             headers = {"Authorization": f"Bearer {self.access_token}"}
 
-            # Create job request
-            job_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_create']}"
-            job_data = {
-                "datatype_id": self.pipeline_map[pipeline_text],
-                "geometry": geometry,
-                "start_date": start_dt,
-                "end_date": end_dt,
-            }
-
-            job_response = requests.post(job_url, json=job_data, headers=headers)
-            job_response.raise_for_status()
-
-            job_result = job_response.json()
-            job_id = job_result["id"]
+            job_ids = []
             
-            # Set current job ID for logging
-            self.current_job_id = job_id
-            
-            self.update_status(f"Job created with ID: {job_id}", "info")
+            # Create a job for each selected layer type
+            for item in selected_items:
+                pipeline_text = item.data(Qt.UserRole)
+                
+                # Create job request
+                job_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_create']}"
+                job_data = {
+                    "datatype_id": self.pipeline_map[pipeline_text],
+                    "geometry": geometry,
+                    "start_date": start_dt,
+                    "end_date": end_dt,
+                }
 
-            # Start monitoring the job
-            self.start_listening(job_id)
+                job_response = requests.post(job_url, json=job_data, headers=headers)
+                job_response.raise_for_status()
+
+                job_result = job_response.json()
+                job_id = job_result["id"]
+                job_ids.append(job_id)
+                
+                self.update_status(f"Job created with ID: {job_id} for {pipeline_text}", "info")
+
+            # Start monitoring all jobs
+            for job_id in job_ids:
+                self.start_listening(job_id)
+            
+            self.update_status(f"Started monitoring {len(job_ids)} job(s)", "info")
 
         except Exception as e:
             self.update_status(f"Error sending request: {e}", "error")
@@ -1104,8 +1123,8 @@ class ErmesQGISDialog(QDockWidget):
     # Validate form (request tab)
     def validate_form_request(self):
         """Validates the form and enables/disables the request button accordingly"""
-        # FIRST CHECK: If a job is currently being monitored, keep button disabled
-        if self.thread is not None and self.thread.isRunning():
+        # FIRST CHECK: If any jobs are currently being monitored, keep button disabled
+        if self.has_active_jobs():
             self.requestPushButton.setEnabled(False)
             return
         
@@ -1182,10 +1201,10 @@ class ErmesQGISDialog(QDockWidget):
             self.update_status("Error: Please login before making a request.", "error")
             return
         
-        # Check if a job is already running
-        if self.thread is not None and self.thread.isRunning():
+        # Check if any jobs are currently running
+        if self.has_active_jobs():
             self.update_validation_status(
-                "Cannot start a new job while another job is already running and being monitored.",
+                "Cannot start new jobs while other jobs are already running and being monitored.",
                 "warning"
             )
             return
@@ -1233,7 +1252,6 @@ class ErmesQGISDialog(QDockWidget):
             # Generate a temporary job ID for file uploads (will be replaced with actual job ID later)
             
             temp_job_id = f"upload_{uuid.uuid4().hex[:8]}"
-            self.current_job_id = temp_job_id
 
             # Create the upload task
             upload_task = FileUploadTask(
@@ -1251,15 +1269,15 @@ class ErmesQGISDialog(QDockWidget):
             task_manager = QgsApplication.taskManager()
             task_manager.addTask(upload_task)
 
-            # Connect signals for safe communication
-            upload_task.status_update.connect(self.update_status)
+            # Connect signals for safe communication - use lambda to bind temp_job_id
+            upload_task.status_update.connect(lambda msg, lvl="info": self.update_status_for_job(temp_job_id, msg, lvl))
             upload_task.upload_completed.connect(self.on_file_upload_completed)
             upload_task.upload_failed.connect(self.on_file_upload_failed)
 
             # Disable button during upload and show loading indicator
             self.requestFilePushButton.setEnabled(False)
             self.fromLayerLoadingLabel.setVisible(True)
-            self.update_status(f"Job created and started for: {filename}", "info")
+            self.update_status_for_job(temp_job_id, f"Job created and started for: {filename}", "info")
 
             # Check task status after a short delay
 
@@ -1321,14 +1339,10 @@ class ErmesQGISDialog(QDockWidget):
     # ------------------------------------------------------------------------------------------------
     def start_listening(self, job_id):
         """Set up the worker and thread to start monitoring the job."""
-        if self.thread is not None and self.thread.isRunning():
-            self.update_status("Already monitoring a job.", "warning")
-            return
-
         # Create a QThread
-        self.thread = QThread()
+        thread = QThread()
         # Create a worker
-        self.worker = MainWorker(
+        worker = MainWorker(
             api_base_url=self.api_base_url,
             username=self.username,
             password=self.password,
@@ -1337,28 +1351,36 @@ class ErmesQGISDialog(QDockWidget):
         )
 
         # Move worker to the thread
-        self.worker.moveToThread(self.thread)
+        worker.moveToThread(thread)
 
         # Connect signals and slots
-        self.thread.started.connect(self.worker.run)
-        self.worker.finished.connect(self.thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
+        thread.started.connect(worker.run)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
 
         # Connect the thread's finished signal to our cleanup method
-        self.thread.finished.connect(self.cleanup_thread)
+        # Use lambda to pass the thread, worker, and job_id to the cleanup method
+        thread.finished.connect(lambda: self.cleanup_thread(thread, worker, job_id))
 
-        self.worker.layer_ready.connect(self.load_layer)
-        self.worker.status_updated.connect(self.update_status)
-        self.worker.error.connect(lambda msg: self.update_status(msg, "error"))
+        worker.layer_ready.connect(self.load_layer)
+        # Connect status updates with job_id using lambda to capture it
+        worker.status_updated.connect(lambda msg: self.update_status_for_job(job_id, msg, "info"))
+        worker.error.connect(lambda msg: self.update_status_for_job(job_id, msg, "error"))
+
+        # Add to lists
+        self.threads.append(thread)
+        self.workers.append(worker)
 
         # Start the thread
-        self.thread.start()
+        thread.start()
 
         # Disable button and show loading indicator
         self.requestPushButton.setEnabled(False)
         self.requestLoadingLabel.setVisible(True)
-        self.update_status(f"Started monitoring job {job_id}...", "info")
+        
+        # Create the BaseMessageBox for this job
+        self.update_status_for_job(job_id, f"Started monitoring job {job_id}...", "info")
 
     def load_layer(self, file_path, datatype_id=None):
         """Loads the downloaded file into QGIS. This runs on the main thread."""
@@ -1536,8 +1558,8 @@ class ErmesQGISDialog(QDockWidget):
     
     def validate_form_from_layer(self):
         """Validates the form and enables/disables the request button accordingly"""
-        # FIRST CHECK: If a job is currently being monitored, keep button disabled
-        if self.thread is not None and self.thread.isRunning():
+        # FIRST CHECK: If any jobs are currently being monitored, keep button disabled
+        if self.has_active_jobs():
             self.requestFilePushButton.setEnabled(False)
             return
         
@@ -1594,6 +1616,48 @@ class ErmesQGISDialog(QDockWidget):
     # ------------------------------------------------------------------------------------------------
     # Status updates (request and from layer tabs)
     # ------------------------------------------------------------------------------------------------
+    
+    def update_status_for_job(self, job_id, message, level="info"):
+        """
+        Updates the status for a specific job ID.
+        This creates/updates a BaseMessageBox for the given job.
+        
+        :param job_id: The job ID to update
+        :param message: The status message
+        :param level: The message level (info, warning, error, success)
+        """
+        # Add timestamp and format the message
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_message = f"{level.upper()}: {message}"
+        formatted_message_with_timestamp = f"[{timestamp}] {formatted_message}"
+
+        # Check for duplicate: identical level and message (ignoring timestamp)
+        if formatted_message not in self._cached_messages:
+            self._cached_messages.append(formatted_message)
+            self.status_messages.append(formatted_message_with_timestamp)
+
+        # Add to job log widgets using the job_id as box_type
+        try:
+            if hasattr(self, 'job_log_widget_1'):
+                self.job_log_widget_1.add_message(str(job_id), message, level)
+            if hasattr(self, 'job_log_widget_2'):
+                self.job_log_widget_2.add_message(str(job_id), message, level)
+            
+            # Update job status indicator
+            color_map = {
+                "info": "#2196F3",
+                "success": "#4CAF50",
+                "warning": "#FF9800",
+                "error": "#F44336"
+            }
+            color = color_map.get(level, "#666666")
+            
+            if hasattr(self, 'job_log_widget_1'):
+                self.job_log_widget_1.update_status(str(job_id), level.upper(), color)
+            if hasattr(self, 'job_log_widget_2'):
+                self.job_log_widget_2.update_status(str(job_id), level.upper(), color)
+        except Exception as e:
+            print(f"Error updating job log widget: {e}")
 
     def update_status(self, message, level="info"):
         """Updates the status label and logs to QGIS log."""
@@ -1682,15 +1746,20 @@ class ErmesQGISDialog(QDockWidget):
     # ------------------------------------------------------------------------------------------------
 
     def closeEvent(self, event):
-        """Ensure the thread is stopped when the dialog is closed."""
+        """Ensure all threads are stopped when the dialog is closed."""
         try:
             # Stop token validation timer
             self.token_timer.stop()
 
-            if self.thread and self.thread.isRunning():
-                self.worker.stop()
-                self.thread.quit()
-                self.thread.wait()  # Wait for the thread to finish
+            # Stop all job monitoring threads
+            for worker in self.workers:
+                if hasattr(worker, 'stop'):
+                    worker.stop()
+            
+            for thread in self.threads:
+                if thread.isRunning():
+                    thread.quit()
+                    thread.wait()  # Wait for the thread to finish
 
             # Stop jobs monitoring
             if self.jobs_thread and self.jobs_thread.isRunning():
@@ -1702,20 +1771,28 @@ class ErmesQGISDialog(QDockWidget):
 
         event.accept()
 
-    def cleanup_thread(self):
+    def cleanup_thread(self, thread, worker, job_id):
         """
         Cleans up thread and worker references after the thread has finished.
         This slot is connected to the thread's finished signal.
+        
+        :param thread: The QThread that finished
+        :param worker: The worker object associated with the thread
+        :param job_id: The job ID that finished
         """
-        # Hide loading indicator
-        self.requestLoadingLabel.setVisible(False)
-
-        # Clear current job ID after thread finishes
-        self.current_job_id = None
-
-        # Set the Python references to None
-        self.thread = None
-        self.worker = None
+        # Remove the thread and worker from lists if they exist
+        if thread in self.threads:
+            self.threads.remove(thread)
+        if worker in self.workers:
+            self.workers.remove(worker)
+        
+        # Update the job's status to completed
+        self.update_status_for_job(job_id, f"Job {job_id} completed", "success")
+        
+        # If all jobs are finished, hide loading indicator
+        if not self.has_active_jobs():
+            self.requestLoadingLabel.setVisible(False)
+            self.update_status("All jobs completed", "success")
         
         # Re-validate the form to enable/disable the button appropriately
         self.validate_form_request()
