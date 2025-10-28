@@ -1102,14 +1102,31 @@ class ErmesQGISDialog(QDockWidget):
                     "end_date": end_dt,
                 }
 
-                job_response = requests.post(job_url, json=job_data, headers=headers)
-                job_response.raise_for_status()
-
-                job_result = job_response.json()
-                job_id = job_result["id"]
-                job_ids.append(job_id)
-                
-                self.update_status(f"Job created with ID: {job_id} for {pipeline_text}", "info")
+                try:
+                    job_response = requests.post(job_url, json=job_data, headers=headers)
+                    job_response.raise_for_status()
+                    job_result = job_response.json()
+                    job_id = job_result["id"]
+                    job_ids.append(job_id)
+                    self.update_status(f"Job created with ID: {job_id} for {pipeline_text}", "info")
+                except requests.exceptions.HTTPError as http_err:
+                    # Only handle 400 with extra details
+                    if job_response is not None and job_response.status_code == 400:
+                        try:
+                            details = job_response.json()
+                        except Exception:
+                            details = job_response.text
+                        self.update_status(
+                            f"Bad request: {details.get('detail', details)}", "error"
+                        )
+                    else:
+                        self.update_status(
+                            f"HTTP error occurred: {http_err}", "error"
+                        )
+                    return
+                except Exception as e:
+                    self.update_status(f"Error sending request: {e}", "error")
+                    return
 
             # Start monitoring all jobs
             for job_id in job_ids:

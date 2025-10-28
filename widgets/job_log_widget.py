@@ -33,7 +33,7 @@ class BaseMessageBox(QWidget):
         header_frame.setStyleSheet(f"""
             QFrame {{
                 background-color: {self.color};
-                border: 2px solid {self.color};
+                border: 2px solid #CCCCCC;;
                 border-radius: 4px;
                 padding: 5px;
             }}
@@ -61,12 +61,12 @@ class BaseMessageBox(QWidget):
         
         # Title label
         self.title_label = QLabel(f"{self.prefix} {self.title}")
-        self.title_label.setStyleSheet("font-weight: bold; font-size: 12px; color: black;")
+        self.title_label.setStyleSheet("font-weight: bold; font-size: 12px; color: black; border: none;")
         header_layout.addWidget(self.title_label)
         
         # Status label
         self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: black; font-size: 10px;")
+        self.status_label.setStyleSheet("color: black; font-size: 10px; border: none;")
         header_layout.addWidget(self.status_label)
 
         header_layout.addStretch()
