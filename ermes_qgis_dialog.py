@@ -38,14 +38,22 @@ from qgis.core import (
     QgsVectorLayer,
     QgsApplication,
     QgsWkbTypes,
-    QgsRectangle,
-    QgsCoordinateTransform,
-    QgsCoordinateReferenceSystem,
     QgsTask,
 )
+import uuid
 from qgis.utils import iface
 from qgis.PyQt import uic, QtWidgets
-from PyQt5.QtWidgets import QTableWidgetItem, QHeaderView, QDockWidget, QListWidgetItem, QLabel
+from PyQt5.QtWidgets import (
+    QTableWidgetItem,
+    QHeaderView,
+    QDockWidget,
+    QListWidgetItem,
+    QLabel,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+)
 from qgis.PyQt.QtCore import QThread, QTimer
 from PyQt5.QtGui import QPixmap, QIcon
 from qgis.core import QgsMapLayerProxyModel
@@ -57,10 +65,13 @@ from PyQt5.QtCore import Qt
 from .workers.job import JobsWorker
 from .workers.main import MainWorker
 from .workers.file_upload_task import FileUploadTask
+from .workers.job_download_task import JobDownloadTask
 from .workers.token_manager import TokenManager
 
 # Import the BoundingBoxWidget
 from .widgets.bbox_widget import RectangleMapTool
+# Import the JobLogWidget
+from .widgets.job_log_widget import JobLogWidget
 
 # Import utility functions
 from .utils.date_utils import parse_date
@@ -219,6 +230,9 @@ class ErmesQGISDialog(QDockWidget):
         
         # Setup loading indicators for the "Get Layer" buttons
         self.setup_loading_indicators()
+        
+        # Setup job log widgets after all UI elements are loaded
+        self.setup_job_log_widgets()
 
     def _initialize_plugin_data(self):
         """Initialize plugin-specific data and settings"""
@@ -250,13 +264,26 @@ class ErmesQGISDialog(QDockWidget):
         # Initialize status messages list
         self.status_messages = []
         self._cached_messages = []
+        
+        # Track current job ID for logging
+        self.current_job_id = None
 
         self.credentials_path = os.path.join( os.path.dirname(__file__), self.config.credentials_file)
 
-    # Credentials handling methods
+        # Setup job log widgets (replace textLogger) - do this after UI is loaded
+        # This will be called in _initialize_plugin
+        self.setup_job_log_widgets()
     
+    # ------------------------------------------------------------------------------------------------
+    # Login Tab
+    # ------------------------------------------------------------------------------------------------
+    
+    # Credentials handling methods
     def save_credentials(self, username, password):
-        """Save credentials to a file with basic encoding"""
+        """
+        Save credentials to a file with basic encoding.
+        This is used to save the credentials for auto-login.
+        """
         try:
         
             # Encode credentials (basic obfuscation, not secure encryption)
@@ -276,7 +303,9 @@ class ErmesQGISDialog(QDockWidget):
             print(f"Could not save credentials: {e}")
     
     def load_credentials(self):
-        """Load credentials from file if it exists"""
+        """Load credentials from file if it exists.
+        This is used to load the credentials for auto-login.
+        """
         try:
             if not os.path.exists(self.credentials_path):
                 return
@@ -305,316 +334,6 @@ class ErmesQGISDialog(QDockWidget):
                 os.remove(self.credentials_path)
         except Exception as e:
             print(f"Could not delete credentials file: {e}")
-
-    # UI setup methods
-    
-    def setup_jobs_table(self):
-        """Setup the jobs table with appropriate columns"""
-        # Assuming the table is named jobsTableWidget
-        if hasattr(self, "jobsTableWidget"):
-            self.jobsTableWidget.setColumnCount(7)
-            self.jobsTableWidget.setHorizontalHeaderLabels(
-                [
-                    "ID",
-                    "Pipeline",
-                    "Status",
-                    "Status Message",
-                    "Created",
-                    "Start Date",
-                    "End Date",
-                ]
-            )
-
-            # Set column widths
-            header = self.jobsTableWidget.horizontalHeader()
-            header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID
-            header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Pipeline
-            header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Status
-            header.setSectionResizeMode(
-                3, QHeaderView.ResizeToContents
-            )  # Status Message
-            header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Created
-            header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Start Date
-            header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # End Date
-
-            # Hide the vertical header (row numbers)
-            self.jobsTableWidget.verticalHeader().setVisible(False)
-
-
-
-    def setup_layer_type_list(self):
-        """Setup the layer type list widget with images and descriptions"""
-        if hasattr(self, "layerTypeListWidget"):
-            self.layerTypeListWidget.clear()
-            
-            # Get the base path for images (plugin root directory)
-            base_path = os.path.dirname(__file__)
-            
-            for layer_name, layer_data in self.pipeline_info.items():
-                # Create list widget item
-                item = QListWidgetItem()
-                
-                # Set the icon (look in plugin root directory)
-                icon_path = os.path.join(base_path, self.config.images_directory, layer_data["image"])
-                if os.path.exists(icon_path):
-                    item.setIcon(QIcon(icon_path))
-                else:
-                    # Use default QGIS icon as placeholder
-                    item.setIcon(QIcon(":/images/themes/default/mIconRaster.svg"))
-                
-                # Set the text with name and description
-                item.setText(f"{layer_name}\n{layer_data['description']}")
-                
-                # Store the layer name as user data for easy retrieval
-                item.setData(Qt.UserRole, layer_name)
-                
-                # Set tooltip
-                item.setToolTip(f"{layer_name}: {layer_data['description']}")
-                
-                # Add item to list
-                self.layerTypeListWidget.addItem(item)
-            
-            # Select the first item (Sentinel-1 image) by default
-            if self.layerTypeListWidget.count() > 0:
-                self.layerTypeListWidget.setCurrentRow(0)
-            
-            # Connect selection change signal
-            self.layerTypeListWidget.itemSelectionChanged.connect(self.validate_form_request)
-
-    def start_jobs_monitoring(self):
-        """Start monitoring jobs from the API"""
-        try:
-            if self.jobs_thread is not None and self.jobs_thread.isRunning():
-                self.update_status("Already monitoring jobs.", "warning")
-                return
-        except Exception as e:
-            # If the jobs_thread is not initialized, create it
-            pass
-
-        # Create a QThread for jobs monitoring
-        self.jobs_thread = QThread()
-        # Create a jobs worker
-        self.jobs_worker = JobsWorker(
-            api_base_url=self.api_base_url, access_token=self.access_token, config=self.config
-        )
-
-        # Move worker to the thread
-        self.jobs_worker.moveToThread(self.jobs_thread)
-
-        # Connect signals and slots
-        self.jobs_thread.started.connect(self.jobs_worker.run)
-        self.jobs_worker.finished.connect(self.jobs_thread.quit)
-        self.jobs_worker.finished.connect(self.jobs_worker.deleteLater)
-        self.jobs_thread.finished.connect(self.jobs_thread.deleteLater)
-
-        # Connect worker signals
-        self.jobs_worker.jobs_updated.connect(self.update_jobs_table)
-        self.jobs_worker.error.connect(lambda msg: self.update_status(msg, "error"))
-
-        # Start the thread
-        self.jobs_thread.start()
-
-    def update_jobs_table(self, jobs):
-        """Update the jobs table with the latest jobs data"""
-        if not hasattr(self, "jobsTableWidget"):
-            return
-
-        self.jobsTableWidget.setRowCount(0)  # Clear existing rows
-
-        for job in jobs:
-            # Show all jobs regardless of status
-            row = self.jobsTableWidget.rowCount()
-            self.jobsTableWidget.insertRow(row)
-
-            datatype_id = job.get("body", {}).get("datatype_id", "")
-            start_date = job.get("body", {}).get("start_date", "")
-            end_date = job.get("body", {}).get("end_date", "")
-
-            # Add job data to table
-            self.jobsTableWidget.setItem(
-                row, 0, QTableWidgetItem(str(job.get("id", "")))
-            )
-            self.jobsTableWidget.setItem(row, 1, QTableWidgetItem(datatype_id))
-            self.jobsTableWidget.setItem(
-                row, 2, QTableWidgetItem(job.get("status", ""))
-            )
-            self.jobsTableWidget.setItem(
-                row, 3, QTableWidgetItem(job.get("result", ""))
-            )
-            self.jobsTableWidget.setItem(
-                row, 4, QTableWidgetItem(job.get("created_at", ""))
-            )
-            self.jobsTableWidget.setItem(row, 5, QTableWidgetItem(start_date))
-            self.jobsTableWidget.setItem(row, 6, QTableWidgetItem(end_date))
-
-            self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
-
-    def download_selected_jobs(self):
-        """Download and load the selected job from the Jobs Table into QGIS"""
-        # Get the currently selected row
-        selected_items = self.jobsTableWidget.selectedItems()
-        
-        if not selected_items:
-            self.update_status("No job selected for download.", "warning")
-            return
-        
-        # Get the first selected item (only one row can be selected)
-        row = selected_items[0].row()
-        
-        try:
-            # Get job data from the table
-            job_item = self.jobsTableWidget.item(row, 0)
-            if not job_item:
-                self.update_status("Error: Could not retrieve job data.", "error")
-                return
-            
-            job_data = job_item.data(Qt.UserRole)
-            job_id = job_data.get("id")
-            job_status = job_data.get("status")
-            resource_url = job_data.get("resource_url")
-            
-            # Check if job can be downloaded
-            if job_status != "end":
-                self.update_status(
-                    f"Job {job_id} cannot be downloaded yet. Current status: {job_status}",
-                    "warning"
-                )
-                return
-            
-            if not resource_url:
-                self.update_status(
-                    f"Job {job_id} has no resource available for download.",
-                    "warning"
-                )
-                return
-            
-            # Download the job resource
-            self.update_status(f"Downloading job {job_id}...", "info")
-            self.download_job_resource(job_id)
-            
-        except Exception as e:
-            self.update_status(
-                f"Internal error processing job from row {row}: {e}", "error"
-            )
-
-    def download_job_resource(self, job_id):
-        """Download a specific job resource and load it into QGIS"""
-
-        try:
-            # First, get the job details to retrieve the datatype_id
-            job_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_detail'].format(job_id=job_id)}"
-            headers = {"Authorization": f"Bearer {self.access_token}"}
-
-            job_response = requests.get(job_url, headers=headers)
-            job_response.raise_for_status()
-            job_data = job_response.json()
-
-            # Extract datatype_id from the job data
-            datatype_id = job_data.get("body", {}).get("datatype_id", None)
-
-            retrieve_url = f"{self.api_base_url}{self.config.api_endpoints['retrieve'].format(job_id=job_id)}"
-
-            self.update_status(f"Downloading job {job_id}...", "info")
-
-            with requests.get(retrieve_url, headers=headers, stream=True) as response:
-                response.raise_for_status()
-
-                # Get filename from Content-Disposition header
-                content_disp = response.headers.get("Content-Disposition", "")
-                filename = None
-                if "filename=" in content_disp:
-                    filename = content_disp.split("filename=")[-1].strip('"; ')
-                if not filename:
-                    filename = f"{job_id}.zip"
-
-                # Use a temporary directory to save the file
-                with tempfile.TemporaryDirectory(
-                    prefix=f"{self.config.temp_dir_prefix}{job_id}_"
-                ) as temp_dir:
-                    cache_path = os.path.join(temp_dir, filename)
-
-                    with open(cache_path, "wb") as f:
-                        for chunk in response.iter_content(chunk_size=self.config.processing_chunk_size):
-                            if chunk:
-                                f.write(chunk)
-
-                    # Load the downloaded file into QGIS with datatype_id
-                    self.load_layer(cache_path, datatype_id)
-                # Temporary directory and file are automatically cleaned up here
-
-        except Exception as e:
-            self.update_status(f"Internal error downloading job {job_id}", "error")
-
-
-    def refresh_jobs_table(self):
-        """Refreshes the jobs table by re-fetching jobs from the API."""
-        if not self.access_token:
-            self.update_status("Error: Please login before refreshing jobs.", "error")
-            return
-
-        # Check token validity before making request
-        if not self.token_manager.check_and_handle_expiration():
-            self.perform_logout()
-            self.update_status("Session expired. Please login again.", "warning")
-            return
-
-        self.update_status("Refreshing jobs table...", "info")
-
-        try:
-            # Call the API directly to get jobs
-            headers = {"Authorization": f"Bearer {self.access_token}"}
-            jobs_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_list']}"
-
-            response = requests.get(jobs_url, headers=headers)
-            response.raise_for_status()
-
-            jobs = response.json()["jobs"]
-            self.update_jobs_table(jobs)
-            self.update_status(
-                f"Successfully refreshed jobs table with {len(jobs)} jobs.", "success"
-            )
-
-        except requests.exceptions.RequestException as e:
-            self.update_status(f"Failed to fetch jobs to refresh jobs table", "error")
-        except Exception as e:
-            self.update_status(f"Internal error refreshing jobs table", "error")
-
-    def move_calendar(self, active):
-        """Moves calendar between the "start time" and "end time" line edit fields"""
-        if active == "start_date":
-            self.calendarSpacer.hide()
-        else:
-            self.calendarSpacer.show()
-        self.active_time = active
-
-    def update_dates(self):
-        new_start_time = parse_date(self.startDateLineEdit.text())
-        new_end_time = parse_date(self.endDateLineEdit.text())
-
-        if new_start_time is None or new_end_time is None:
-            self.update_status("Invalid date format.", "error")
-        elif new_start_time and new_end_time and new_start_time > new_end_time:
-            self.update_status("Start date must be before end date.", "warning")
-        elif new_start_time and datetime.fromisoformat(
-            new_start_time
-        ) > datetime.now().replace(tzinfo=None):
-            self.update_status("Start date must be before the current date.", "warning")
-        elif new_end_time and datetime.fromisoformat(
-            new_end_time
-        ) > datetime.now().replace(tzinfo=None):
-            self.update_status("End date must be before the current date.", "warning")
-        else:
-            self.startDateLineEdit.setText(new_start_time)
-            self.endDateLineEdit.setText(new_end_time)
-
-    def add_calendar_date(self):
-        """Handles selected calendar date"""
-        calendar_time = str(self.calendarWidget.selectedDate().toPyDate())
-
-        if self.active_time == "start_date":
-            self.startDateLineEdit.setText(calendar_time)
-        else:
-            self.endDateLineEdit.setText(calendar_time)
 
     def login(self, *_):
         """
@@ -722,6 +441,381 @@ class ErmesQGISDialog(QDockWidget):
             self.loginInfoLabel.setText(f"Login failed: Internal error {e}")
             self.loginPushButton.setEnabled(True)
 
+    def check_token_validity(self):
+        """Check if the current token is still valid and handle expiration"""
+        if not self.access_token:
+            return
+
+        if not self.token_manager.check_and_handle_expiration():
+            # Token is expired, perform automatic logout
+            self.perform_logout()
+            self.update_status("Session expired. Please login again.", "warning")
+
+    def perform_logout(self):
+        """Perform automatic logout when token expires"""
+        # Stop token validation timer
+        self.token_timer.stop()
+
+        # Clear authentication data
+        self.access_token = None
+        self.username = None
+        self.password = None
+        self.token_manager.clear_token()
+        
+        # Clear saved credentials file
+        self.clear_saved_credentials()
+
+        # Stop jobs monitoring
+        if self.jobs_thread and self.jobs_thread.isRunning():
+            self.jobs_worker.stop()
+            self.jobs_thread.quit()
+            self.jobs_thread.wait()
+        # Disable all tabs except login
+        self.tabWidget.setTabEnabled(1, False)
+        self.tabWidget.setTabEnabled(2, False)
+        self.tabWidget.setTabEnabled(3, False)
+
+        # Switch to login tab
+        self.tabWidget.setCurrentIndex(0)
+
+        # Update login status
+        self.loginInfoLabel.setText("Please login again.")
+        self.loginPushButton.setEnabled(True)
+        self.logoutButton.setEnabled(False)
+        
+        # Clear username and password fields
+        if hasattr(self, "usernameLineEdit"):
+            self.usernameLineEdit.clear()
+        if hasattr(self, "passwordLineEdit"):
+            self.passwordLineEdit.clear()
+
+        # Clear jobs table
+        if hasattr(self, "jobsTableWidget"):
+            self.jobsTableWidget.setRowCount(0)
+
+    # ------------------------------------------------------------------------------------------------
+    # Jobs Tab
+    # ------------------------------------------------------------------------------------------------
+    def setup_jobs_table(self):
+        """Setup the jobs table with appropriate columns"""
+        # Assuming the table is named jobsTableWidget
+        if hasattr(self, "jobsTableWidget"):
+            self.jobsTableWidget.setColumnCount(7)
+            self.jobsTableWidget.setHorizontalHeaderLabels(
+                [
+                    "ID",
+                    "Pipeline",
+                    "Status",
+                    "Status Message",
+                    "Created",
+                    "Start Date",
+                    "End Date",
+                ]
+            )
+
+            # Set column widths
+            header = self.jobsTableWidget.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID
+            header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Pipeline
+            header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Status
+            header.setSectionResizeMode(
+                3, QHeaderView.ResizeToContents
+            )  # Status Message
+            header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Created
+            header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Start Date
+            header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # End Date
+
+            # Hide the vertical header (row numbers)
+            self.jobsTableWidget.verticalHeader().setVisible(False)
+
+    def update_jobs_table(self, jobs):
+        """Update the jobs table with the latest jobs data"""
+        if not hasattr(self, "jobsTableWidget"):
+            return
+
+        self.jobsTableWidget.setRowCount(0)  # Clear existing rows
+
+        for job in jobs:
+            # Show all jobs regardless of status
+            row = self.jobsTableWidget.rowCount()
+            self.jobsTableWidget.insertRow(row)
+
+            datatype_id = job.get("body", {}).get("datatype_id", "")
+            start_date = job.get("body", {}).get("start_date", "")
+            end_date = job.get("body", {}).get("end_date", "")
+
+            # Add job data to table
+            self.jobsTableWidget.setItem(
+                row, 0, QTableWidgetItem(str(job.get("id", "")))
+            )
+            self.jobsTableWidget.setItem(row, 1, QTableWidgetItem(datatype_id))
+            self.jobsTableWidget.setItem(
+                row, 2, QTableWidgetItem(job.get("status", ""))
+            )
+            self.jobsTableWidget.setItem(
+                row, 3, QTableWidgetItem(job.get("result", ""))
+            )
+            self.jobsTableWidget.setItem(
+                row, 4, QTableWidgetItem(job.get("created_at", ""))
+            )
+            self.jobsTableWidget.setItem(row, 5, QTableWidgetItem(start_date))
+            self.jobsTableWidget.setItem(row, 6, QTableWidgetItem(end_date))
+
+            self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
+
+
+    def download_selected_jobs(self):
+        """Download and load the selected job from the Jobs Table into QGIS"""
+        # Get the currently selected row
+        selected_items = self.jobsTableWidget.selectedItems()
+        
+        if not selected_items:
+            self.update_status("No job selected for download.", "warning")
+            return
+        
+        # Get the first selected item (only one row can be selected)
+        row = selected_items[0].row()
+        
+        try:
+            # Get job data from the table
+            job_item = self.jobsTableWidget.item(row, 0)
+            if not job_item:
+                self.update_status("Error: Could not retrieve job data.", "error")
+                return
+            
+            job_data = job_item.data(Qt.UserRole)
+            job_id = job_data.get("id")
+            job_status = job_data.get("status")
+            resource_url = job_data.get("resource_url")
+            
+            # Check if job can be downloaded
+            if job_status != "end":
+                self.update_status(
+                    f"Job {job_id} cannot be downloaded yet. Current status: {job_status}",
+                    "warning"
+                )
+                return
+            
+            if not resource_url:
+                self.update_status(
+                    f"Job {job_id} has no resource available for download.",
+                    "warning"
+                )
+                return
+            
+            # Start asynchronous download
+            self.start_job_download_task(job_id)
+            
+        except Exception as e:
+            self.update_status(
+                f"Internal error processing job from row {row}: {e}", "error"
+            )
+
+    def start_job_download_task(self, job_id):
+        """Start a QgsTask for downloading the job resource asynchronously"""
+        try:
+            description = f"Downloading job {job_id}"
+            
+            # Set current job ID for logging
+            self.current_job_id = job_id
+            
+            # Create the download task
+            download_task = JobDownloadTask(
+                description=description,
+                job_id=job_id,
+                api_base_url=self.api_base_url,
+                access_token=self.access_token,
+                dialog_ref=self,
+                config=self.config,
+            )
+
+            # Add the task to QGIS task manager
+            task_manager = QgsApplication.taskManager()
+            task_manager.addTask(download_task)
+
+            # Connect signals for safe communication
+            download_task.status_update.connect(self.update_status)
+            download_task.download_completed.connect(self.on_job_download_completed)
+            download_task.download_failed.connect(self.on_job_download_failed)
+
+            self.update_status(f"Starting download for job {job_id}...", "info")
+
+        except Exception as e:
+            self.update_status(f"Error starting job download: {e}", "error")
+            self.current_job_id = None
+
+    def refresh_jobs_table(self):
+        """Refreshes the jobs table by re-fetching jobs from the API."""
+        if not self.access_token:
+            self.update_status("Error: Please login before refreshing jobs.", "error")
+            return
+
+        # Check token validity before making request
+        if not self.token_manager.check_and_handle_expiration():
+            self.perform_logout()
+            self.update_status("Session expired. Please login again.", "warning")
+            return
+
+        self.update_status("Refreshing jobs table...", "info")
+
+        try:
+            # Call the API directly to get jobs
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            jobs_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_list']}"
+
+            response = requests.get(jobs_url, headers=headers)
+            response.raise_for_status()
+
+            jobs = response.json()["jobs"]
+            self.update_jobs_table(jobs)
+            self.update_status(
+                f"Successfully refreshed jobs table with {len(jobs)} jobs.", "success"
+            )
+
+        except requests.exceptions.RequestException as e:
+            self.update_status(f"Failed to fetch jobs to refresh jobs table", "error")
+        except Exception as e:
+            self.update_status(f"Internal error refreshing jobs table", "error")
+
+
+    # ------------------------------------------------------------------------------------------------
+    # Layer type list (request tab)
+    # ------------------------------------------------------------------------------------------------
+    def setup_layer_type_list(self):
+        """Setup the layer type list widget with images and descriptions"""
+        if hasattr(self, "layerTypeListWidget"):
+            self.layerTypeListWidget.clear()
+            
+            # Get the base path for images (plugin root directory)
+            base_path = os.path.dirname(__file__)
+            
+            for layer_name, layer_data in self.pipeline_info.items():
+                # Create list widget item
+                item = QListWidgetItem()
+                
+                # Set the icon (look in plugin root directory)
+                icon_path = os.path.join(base_path, self.config.images_directory, layer_data["image"])
+                if os.path.exists(icon_path):
+                    item.setIcon(QIcon(icon_path))
+                else:
+                    # Use default QGIS icon as placeholder
+                    item.setIcon(QIcon(":/images/themes/default/mIconRaster.svg"))
+                
+                # Set the text with name and description
+                item.setText(f"{layer_name}\n{layer_data['description']}")
+                
+                # Store the layer name as user data for easy retrieval
+                item.setData(Qt.UserRole, layer_name)
+                
+                # Set tooltip
+                item.setToolTip(f"{layer_name}: {layer_data['description']}")
+                
+                # Add item to list
+                self.layerTypeListWidget.addItem(item)
+            
+            # Select the first item (Sentinel-1 image) by default
+            if self.layerTypeListWidget.count() > 0:
+                self.layerTypeListWidget.setCurrentRow(0)
+            
+            # Connect selection change signal
+            self.layerTypeListWidget.itemSelectionChanged.connect(self.validate_form_request)
+
+    def start_jobs_monitoring(self):
+        """Start monitoring jobs from the API"""
+        try:
+            if self.jobs_thread is not None and self.jobs_thread.isRunning():
+                self.update_status("Already monitoring jobs.", "warning")
+                return
+        except Exception as e:
+            # If the jobs_thread is not initialized, create it
+            pass
+
+        # Create a QThread for jobs monitoring
+        self.jobs_thread = QThread()
+        # Create a jobs worker
+        self.jobs_worker = JobsWorker(
+            api_base_url=self.api_base_url, access_token=self.access_token, config=self.config
+        )
+
+        # Move worker to the thread
+        self.jobs_worker.moveToThread(self.jobs_thread)
+
+        # Connect signals and slots
+        self.jobs_thread.started.connect(self.jobs_worker.run)
+        self.jobs_worker.finished.connect(self.jobs_thread.quit)
+        self.jobs_worker.finished.connect(self.jobs_worker.deleteLater)
+        self.jobs_thread.finished.connect(self.jobs_thread.deleteLater)
+
+        # Connect worker signals
+        self.jobs_worker.jobs_updated.connect(self.update_jobs_table)
+        self.jobs_worker.error.connect(lambda msg: self.update_status(msg, "error"))
+
+        # Start the thread
+        self.jobs_thread.start()
+
+    def on_job_download_completed(self, file_path, datatype_id):
+        """Handle successful job download completion.
+        This is called when the job download is completed.
+        It loads the downloaded file into QGIS.
+        """
+        try:
+            self.update_status(
+                "Download completed successfully. Loading result into QGIS...",
+                "success",
+            )
+            self.load_layer(file_path, datatype_id)
+            
+            # Clear current job ID after completion
+            self.current_job_id = None
+            
+        except Exception as e:
+            self.update_status(f"Error loading downloaded job result: {e}", "error")
+            self.current_job_id = None
+
+    def on_job_download_failed(self, error_message):
+        """Handle job download failure"""
+        self.update_status(error_message, "error")
+        self.current_job_id = None
+
+    # Calendar (request tab)
+    def move_calendar(self, active):
+        """Moves calendar between the "start time" and "end time" line edit fields"""
+        if active == "start_date":
+            self.calendarSpacer.hide()
+        else:
+            self.calendarSpacer.show()
+        self.active_time = active
+
+    def update_dates(self):
+        new_start_time = parse_date(self.startDateLineEdit.text())
+        new_end_time = parse_date(self.endDateLineEdit.text())
+
+        if new_start_time is None or new_end_time is None:
+            self.update_validation_status("Invalid date format.", "error")
+        elif new_start_time and new_end_time and new_start_time > new_end_time:
+            self.update_validation_status("Start date must be before end date.", "warning")
+        elif new_start_time and datetime.fromisoformat(
+            new_start_time
+        ) > datetime.now().replace(tzinfo=None):
+            self.update_validation_status("Start date must be before the current date.", "warning")
+        elif new_end_time and datetime.fromisoformat(
+            new_end_time
+        ) > datetime.now().replace(tzinfo=None):
+            self.update_validation_status("End date must be before the current date.", "warning")
+        else:
+            self.startDateLineEdit.setText(new_start_time)
+            self.endDateLineEdit.setText(new_end_time)
+
+    def add_calendar_date(self):
+        """Handles selected calendar date"""
+        calendar_time = str(self.calendarWidget.selectedDate().toPyDate())
+
+        if self.active_time == "start_date":
+            self.startDateLineEdit.setText(calendar_time)
+        else:
+            self.endDateLineEdit.setText(calendar_time)
+
+    # Requested geometry handling (request tab)
     def get_aoi_geometry(self):
         """
         Get the Area of Interest (AOI) geometry based on the selected method.
@@ -804,6 +898,119 @@ class ErmesQGISDialog(QDockWidget):
         
         return transformed_geom, None
 
+    # AOI method handling (request tab)
+    def on_aoi_method_changed(self):
+        """Handle changes in AOI method selection (draw rectangle vs select polygon vs map extent)"""
+        if self.drawRectangleRadioButton.isChecked():
+            # Show drawing controls, hide polygon layer combo box
+            self.show_drawing_controls()
+            self.polygonLayerComboBox.setVisible(False)
+        elif self.selectPolygonRadioButton.isChecked():
+            # Hide drawing controls, show polygon layer combo box
+            self.hide_drawing_controls()
+            self.polygonLayerComboBox.setVisible(True)
+        else:  # useMapExtentRadioButton is checked
+            # Hide both drawing controls and polygon layer combo box
+            self.hide_drawing_controls()
+            self.polygonLayerComboBox.setVisible(False)
+
+        # Re-validate the form
+        self.validate_form_request()
+
+    def show_drawing_controls(self):
+        """Show the drawing controls"""
+        # Create a simple widget with draw/clear buttons
+        if self.bboxWidget is None:
+
+
+            self.bboxWidget = QWidget()
+            layout = QVBoxLayout(self.bboxWidget)
+
+            # Instructions
+            instructions = QLabel("Click 'Draw Rectangle' to draw on the map")
+            instructions.setWordWrap(True)
+            layout.addWidget(instructions)
+
+            # Button layout
+            button_layout = QHBoxLayout()
+
+            self.drawButton = QPushButton("Draw Rectangle")
+            self.drawButton.clicked.connect(self.start_drawing)
+            button_layout.addWidget(self.drawButton)
+
+            self.clearButton = QPushButton("Clear Rectangle")
+            self.clearButton.clicked.connect(self.clear_drawing)
+            self.clearButton.setEnabled(False)
+            button_layout.addWidget(self.clearButton)
+
+            layout.addLayout(button_layout)
+
+            # Status label
+            self.statusLabel = QLabel("No rectangle drawn")
+            layout.addWidget(self.statusLabel)
+
+            # Insert the widget into the layout
+            self.aoiMethodLayout.insertWidget(2, self.bboxWidget)
+
+        if self.bboxWidget:
+            self.bboxWidget.setVisible(True)
+
+    def hide_drawing_controls(self):
+        """Hide the drawing controls"""
+        if self.bboxWidget:
+            self.bboxWidget.setVisible(False)
+
+        # Deactivate drawing tool if active
+        if self.rectangleMapTool:
+
+            iface.mapCanvas().unsetMapTool(self.rectangleMapTool)
+            self.rectangleMapTool = None
+
+    def start_drawing(self):
+        """Start drawing mode"""
+
+        if not iface:
+            self.statusLabel.setText("Error: QGIS interface not available")
+            return
+
+        # Create and set the map tool
+        self.rectangleMapTool = RectangleMapTool(iface.mapCanvas(), self)
+        iface.mapCanvas().setMapTool(self.rectangleMapTool)
+
+        self.statusLabel.setText("Click and drag on the map to draw rectangle...")
+
+    def clear_drawing(self):
+        """Clear the drawn rectangle"""
+        if self.rectangleMapTool:
+            self.rectangleMapTool.clear_rectangle()
+
+        self.current_bbox = None
+        self.statusLabel.setText("No rectangle drawn")
+        self.clearButton.setEnabled(False)
+
+        # Re-validate the form
+        self.validate_form_request()
+
+    def set_bbox_from_draw(self, minx, miny, maxx, maxy):
+        """Called by RectangleMapTool when a rectangle is drawn"""
+        self.current_bbox = (minx, miny, maxx, maxy)
+
+        # Update UI
+        self.drawButton.setText("Draw New Rectangle")
+        self.clearButton.setEnabled(True)
+        self.statusLabel.setText(
+            f"Rectangle drawn: {minx:.6f}, {miny:.6f} to {maxx:.6f}, {maxy:.6f}"
+        )
+
+        # Deactivate map tool
+
+        iface.mapCanvas().unsetMapTool(self.rectangleMapTool)
+        self.rectangleMapTool = None
+
+        # Re-validate the form
+        self.validate_form_request()
+    
+    # Send request (request tab)
     def send_request(self):
         """
         Sends a request to the API with the selected parameters.
@@ -822,6 +1029,14 @@ class ErmesQGISDialog(QDockWidget):
             self.update_status("Error: Please login before making a request.", "error")
             return
 
+        # Check if a job is already running
+        if self.thread is not None and self.thread.isRunning():
+            self.update_validation_status(
+                "Cannot start a new job while another job is already running and being monitored.",
+                "warning"
+            )
+            return
+
         # Check token validity before making request
         if not self.token_manager.check_and_handle_expiration():
             self.perform_logout()
@@ -832,7 +1047,7 @@ class ErmesQGISDialog(QDockWidget):
         # Get selected layer from list widget
         selected_items = self.layerTypeListWidget.selectedItems()
         if not selected_items:
-            self.update_status("Error: Please select a layer type.", "error")
+            self.update_validation_status("Please select a layer type.", "error")
             return
         
         pipeline_text = selected_items[0].data(Qt.UserRole)
@@ -842,7 +1057,7 @@ class ErmesQGISDialog(QDockWidget):
         # Get AOI geometry
         unified_qgs_geom, error = self.get_aoi_geometry()
         if error:
-            self.update_status(f"Error: {error}", "error")
+            self.update_validation_status(error, "error")
             return
 
         geometry_str = geometry_to_json(unified_qgs_geom)
@@ -850,7 +1065,7 @@ class ErmesQGISDialog(QDockWidget):
         try:
             geometry = json.loads(geometry_str)
         except Exception as e:
-            self.update_status(f"Error parsing geometry JSON: {e}", "error")
+            self.update_validation_status(f"Error parsing geometry JSON: {e}", "error")
             return
 
         # Start Processing
@@ -874,7 +1089,10 @@ class ErmesQGISDialog(QDockWidget):
 
             job_result = job_response.json()
             job_id = job_result["id"]
-            self.add_log_separator()
+            
+            # Set current job ID for logging
+            self.current_job_id = job_id
+            
             self.update_status(f"Job created with ID: {job_id}", "info")
 
             # Start monitoring the job
@@ -883,10 +1101,93 @@ class ErmesQGISDialog(QDockWidget):
         except Exception as e:
             self.update_status(f"Error sending request: {e}", "error")
 
+    # Validate form (request tab)
+    def validate_form_request(self):
+        """Validates the form and enables/disables the request button accordingly"""
+        # FIRST CHECK: If a job is currently being monitored, keep button disabled
+        if self.thread is not None and self.thread.isRunning():
+            self.requestPushButton.setEnabled(False)
+            return
+        
+        # Check if all required fields are filled
+        start_date = self.startDateLineEdit.text().strip()
+        end_date = self.endDateLineEdit.text().strip()
+        
+        # Check layer type selection
+        selected_layer_type = self.layerTypeListWidget.selectedItems()
+        if not selected_layer_type:
+            self.requestPushButton.setEnabled(False)
+            return
+        
+        # Check AOI method
+        if self.drawRectangleRadioButton.isChecked():
+            # For drawn rectangle, check if bbox exists
+            if not self.current_bbox:
+                self.requestPushButton.setEnabled(False)
+                return
+        elif self.selectPolygonRadioButton.isChecked():
+            # For polygon layer, check if valid layer selected
+            selected_layer = self.polygonLayerComboBox.currentLayer()
+            if not selected_layer:
+                self.requestPushButton.setEnabled(False)
+                return
+        # For map extent, no additional check needed - always available
+
+        # Basic validation: all fields must be present
+        if not start_date or not end_date:
+            self.requestPushButton.setEnabled(False)
+            return
+
+        # Validate date format and range
+        try:
+            start_parsed = parse_date(start_date)
+            end_parsed = parse_date(end_date)
+
+            if start_parsed is None or end_parsed is None:
+                self.requestPushButton.setEnabled(False)
+                return
+
+            if start_parsed and end_parsed and start_parsed > end_parsed:
+                self.requestPushButton.setEnabled(False)
+                return
+
+        except Exception:
+            self.requestPushButton.setEnabled(False)
+            return
+
+        # All validations passed, enable the button
+        self.requestPushButton.setEnabled(True)
+
+    def _validate_polygon_layer(self, selected_layer):
+        """Validate that the selected layer is a valid polygon layer with features"""
+        if not isinstance(selected_layer, QgsVectorLayer):
+            return False
+
+        if selected_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
+            return False
+
+        # Check if layer has features
+        feature_count = selected_layer.featureCount()
+        if feature_count == 0:
+            return False
+
+        return True
+
+    # ------------------------------------------------------------------------------------------------
+    # From layer Tab
+    # ------------------------------------------------------------------------------------------------
     def send_request_from_layer(self):
         """Sends a request to the API with the selected parameters, uploading the raster file asynchronously."""
         if not self.access_token:
             self.update_status("Error: Please login before making a request.", "error")
+            return
+        
+        # Check if a job is already running
+        if self.thread is not None and self.thread.isRunning():
+            self.update_validation_status(
+                "Cannot start a new job while another job is already running and being monitored.",
+                "warning"
+            )
             return
 
         # Retrieve user inputs
@@ -897,14 +1198,14 @@ class ErmesQGISDialog(QDockWidget):
 
         # Input validation
         if not isinstance(selected_layer, QgsRasterLayer):
-            self.update_status("Error: Please select a valid raster layer.", "error")
+            self.update_validation_status("Please select a valid raster layer.", "error")
             return
 
         # Get the file path of the raster layer
         file_path = selected_layer.source()
         if not file_path or not file_path.lower().endswith((".tif", ".tiff")):
-            self.update_status(
-                "Error: The selected raster layer must be a TIFF file.", "error"
+            self.update_validation_status(
+                "The selected raster layer must be a TIFF file.", "error"
             )
             return
 
@@ -916,15 +1217,23 @@ class ErmesQGISDialog(QDockWidget):
         )
 
     def start_file_upload_task(self, file_path: str, datatype_id: str, image_type: str):
-        """Start a QgsTask for uploading the file asynchronously."""
+        """Start a QgsTask for uploading the file asynchronously.
+        This is called when the user selects a raster layer from the layer list and clicks the "Request" button.
+        It uploads the file to the API and starts a job to process the file.
+        """
         try:
             filename = os.path.basename(file_path)
             description = f"Uploading {filename} to ERMES API"
 
             # Validate file exists
             if not os.path.exists(file_path):
-                self.update_status(f"Error: File {filename} does not exist", "error")
+                self.update_validation_status(f"File {filename} does not exist", "error")
                 return
+            
+            # Generate a temporary job ID for file uploads (will be replaced with actual job ID later)
+            
+            temp_job_id = f"upload_{uuid.uuid4().hex[:8]}"
+            self.current_job_id = temp_job_id
 
             # Create the upload task
             upload_task = FileUploadTask(
@@ -953,7 +1262,6 @@ class ErmesQGISDialog(QDockWidget):
             self.update_status(f"Job created and started for: {filename}", "info")
 
             # Check task status after a short delay
-            from PyQt5.QtCore import QTimer
 
             def check_task_status():
                 try:
@@ -991,7 +1299,10 @@ class ErmesQGISDialog(QDockWidget):
                 "success",
             )
             self.load_layer(temp_file_path, datatype_id)
-            self.add_log_separator()
+            
+            # Clear current job ID after completion
+            self.current_job_id = None
+            
             self.requestFilePushButton.setEnabled(True)
             self.fromLayerLoadingLabel.setVisible(False)
         except Exception as e:
@@ -1005,6 +1316,9 @@ class ErmesQGISDialog(QDockWidget):
         self.requestFilePushButton.setEnabled(True)
         self.fromLayerLoadingLabel.setVisible(False)
 
+    # ------------------------------------------------------------------------------------------------
+    # Job monitoring (request and from layer tabs)
+    # ------------------------------------------------------------------------------------------------
     def start_listening(self, job_id):
         """Set up the worker and thread to start monitoring the job."""
         if self.thread is not None and self.thread.isRunning():
@@ -1036,7 +1350,6 @@ class ErmesQGISDialog(QDockWidget):
 
         self.worker.layer_ready.connect(self.load_layer)
         self.worker.status_updated.connect(self.update_status)
-        self.worker.log_separator.connect(self.add_log_separator)
         self.worker.error.connect(lambda msg: self.update_status(msg, "error"))
 
         # Start the thread
@@ -1113,7 +1426,6 @@ class ErmesQGISDialog(QDockWidget):
             root.insertChildNode(0, node.clone())
             root.removeChildNode(node)
         self.update_status(f"Successfully loaded {layer_name}", "success")
-        self.add_log_separator()
 
     def handle_zip_file(self, zip_path, group_name, datatype_id=None):
         """
@@ -1221,194 +1533,14 @@ class ErmesQGISDialog(QDockWidget):
             f"Successfully loaded {loaded_count} layer(s) into group '{group_name}'",
             "success",
         )
-        self.add_log_separator()
-
-    def add_log_separator(self):
-        """Adds a separator to the log."""
-        self.status_messages.append("========================================")
-        try:
-            if self.textLogger is not None:
-                self.textLogger.setText("\n".join(self.status_messages))
-
-                # Auto-scroll to the bottom
-                scrollbar = self.textLogger.verticalScrollBar()
-                scrollbar.setValue(scrollbar.maximum())
-
-            if self.textLogger2 is not None:
-                self.textLogger2.setText("\n".join(self.status_messages))
-
-                # Auto-scroll to the bottom
-                scrollbar = self.textLogger2.verticalScrollBar()
-                scrollbar.setValue(scrollbar.maximum())
-        except:
-            # textLogger doesn't exist, just continue without updating it
-            pass
-
-    def update_status(self, message, level="info"):
-        """Updates the status label and logs to QGIS log."""
-        # Add timestamp and format the message
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        formatted_message = f"{level.upper()}: {message}"
-        formatted_message_with_timestamp = f"[{timestamp}] {formatted_message}"
-
-        # Check for duplicate: identical level and message (ignoring timestamp)
-
-        if formatted_message not in self._cached_messages:
-            self._cached_messages.append(formatted_message)
-            self.status_messages.append(formatted_message_with_timestamp)
-
-            # Only update the textLogger if it exists
-            try:
-                if self.textLogger is not None:
-                    self.textLogger.setText("\n".join(self.status_messages))
-
-                    # Auto-scroll to the bottom
-                    scrollbar = self.textLogger.verticalScrollBar()
-                    scrollbar.setValue(scrollbar.maximum())
-                if self.textLogger2 is not None:
-                    self.textLogger2.setText("\n".join(self.status_messages))
-
-                    # Auto-scroll to the bottom
-                    scrollbar = self.textLogger2.verticalScrollBar()
-                    scrollbar.setValue(scrollbar.maximum())
-            except:
-                # textLogger doesn't exist, just continue without updating it
-                pass
-
-    def closeEvent(self, event):
-        """Ensure the thread is stopped when the dialog is closed."""
-        try:
-            # Stop token validation timer
-            self.token_timer.stop()
-
-            if self.thread and self.thread.isRunning():
-                self.worker.stop()
-                self.thread.quit()
-                self.thread.wait()  # Wait for the thread to finish
-
-            # Stop jobs monitoring
-            if self.jobs_thread and self.jobs_thread.isRunning():
-                self.jobs_worker.stop()
-                self.jobs_thread.quit()
-                self.jobs_thread.wait()
-        except:
-            pass
-
-        event.accept()
-
-    def cleanup_thread(self):
-        """
-        Cleans up thread and worker references after the thread has finished.
-        This slot is connected to the thread's finished signal.
-        """
-        # Re-enable the button and hide loading indicator
-        self.requestPushButton.setEnabled(True)
-        self.requestLoadingLabel.setVisible(False)
-
-        # Set the Python references to None
-        self.thread = None
-        self.worker = None
-
-    def cleanup_temp_dirs(self):
-        """
-        This function is called when QGIS is about to quit.
-        It safely removes all temporary directories created during the session.
-        """
-        try:
-            self.update_status(
-                f"Cleaning up {len(self.temp_dirs_to_clean)} temporary directories",
-                "info",
-            )
-            for dir_path in self.temp_dirs_to_clean:
-                try:
-                    # shutil.rmtree can remove a directory and all its contents
-                    shutil.rmtree(dir_path)
-                except Exception as e:
-                    # Log an error but don't prevent QGIS from closing
-                    print(f"Could not remove temporary directory {dir_path}")
-                    self.update_status(
-                        f"Warning: Could not remove temp dir at location {dir_path}",
-                        "warning",
-                    )
-
-            self.temp_dirs_to_clean.clear()
-        except Exception as e:
-            # Log an error but don't prevent QGIS from closing
-            print(f"Could not remove temporary directory {dir_path}")
-            self.update_status(
-                f"Warning: Could not remove temp dir at location {dir_path}", "warning"
-            )
-
-        self.temp_dirs_to_clean.clear()
-
-    def validate_form_request(self):
-        """Validates the form and enables/disables the request button accordingly"""
-        # Check if all required fields are filled
-        start_date = self.startDateLineEdit.text().strip()
-        end_date = self.endDateLineEdit.text().strip()
-        
-        # Check layer type selection
-        selected_layer_type = self.layerTypeListWidget.selectedItems()
-        if not selected_layer_type:
-            self.requestPushButton.setEnabled(False)
-            return
-        
-        # Check AOI method
-        if self.drawRectangleRadioButton.isChecked():
-            # For drawn rectangle, check if bbox exists
-            if not self.current_bbox:
-                self.requestPushButton.setEnabled(False)
-                return
-        elif self.selectPolygonRadioButton.isChecked():
-            # For polygon layer, check if valid layer selected
-            selected_layer = self.polygonLayerComboBox.currentLayer()
-            if not selected_layer:
-                self.requestPushButton.setEnabled(False)
-                return
-        # For map extent, no additional check needed - always available
-
-        # Basic validation: all fields must be present
-        if not start_date or not end_date:
-            self.requestPushButton.setEnabled(False)
-            return
-
-        # Validate date format and range
-        try:
-            start_parsed = parse_date(start_date)
-            end_parsed = parse_date(end_date)
-
-            if start_parsed is None or end_parsed is None:
-                self.requestPushButton.setEnabled(False)
-                return
-
-            if start_parsed and end_parsed and start_parsed > end_parsed:
-                self.requestPushButton.setEnabled(False)
-                return
-
-        except Exception:
-            self.requestPushButton.setEnabled(False)
-            return
-
-        # All validations passed, enable the button
-        self.requestPushButton.setEnabled(True)
-
-    def _validate_polygon_layer(self, selected_layer):
-        """Validate that the selected layer is a valid polygon layer with features"""
-        if not isinstance(selected_layer, QgsVectorLayer):
-            return False
-
-        if selected_layer.geometryType() != QgsWkbTypes.PolygonGeometry:
-            return False
-
-        # Check if layer has features
-        feature_count = selected_layer.featureCount()
-        if feature_count == 0:
-            return False
-
-        return True
-
+    
     def validate_form_from_layer(self):
         """Validates the form and enables/disables the request button accordingly"""
+        # FIRST CHECK: If a job is currently being monitored, keep button disabled
+        if self.thread is not None and self.thread.isRunning():
+            self.requestFilePushButton.setEnabled(False)
+            return
+        
         selected_layer = self.rasterLayerComboBox.currentLayer()
         image_type = self.imageTypeComboBox.currentText()
         requested_layer = self.requestedLayerComboBox.currentText()
@@ -1459,174 +1591,214 @@ class ErmesQGISDialog(QDockWidget):
                 ]
             )
 
-    def check_token_validity(self):
-        """Check if the current token is still valid and handle expiration"""
-        if not self.access_token:
-            return
+    # ------------------------------------------------------------------------------------------------
+    # Status updates (request and from layer tabs)
+    # ------------------------------------------------------------------------------------------------
 
-        if not self.token_manager.check_and_handle_expiration():
-            # Token is expired, perform automatic logout
-            self.perform_logout()
-            self.update_status("Session expired. Please login again.", "warning")
+    def update_status(self, message, level="info"):
+        """Updates the status label and logs to QGIS log."""
+        # Add timestamp and format the message
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_message = f"{level.upper()}: {message}"
+        formatted_message_with_timestamp = f"[{timestamp}] {formatted_message}"
 
-    def perform_logout(self):
-        """Perform automatic logout when token expires"""
-        # Stop token validation timer
-        self.token_timer.stop()
+        # Check for duplicate: identical level and message (ignoring timestamp)
+        if formatted_message not in self._cached_messages:
+            self._cached_messages.append(formatted_message)
+            self.status_messages.append(formatted_message_with_timestamp)
 
-        # Clear authentication data
-        self.access_token = None
-        self.username = None
-        self.password = None
-        self.token_manager.clear_token()
+        # Add to job log if we have an active job
+        if self.current_job_id is not None:
+            try:
+                # Add to both job log widgets using the job_id as box_type
+                if hasattr(self, 'job_log_widget_1'):
+                    self.job_log_widget_1.add_message(self.current_job_id, message, level)
+                if hasattr(self, 'job_log_widget_2'):
+                    self.job_log_widget_2.add_message(self.current_job_id, message, level)
+                
+                # Update job status indicator
+                self.update_job_status_indicator(level)
+            except Exception as e:
+                pass
+        else:
+            # No active job - add to general warnings/errors box if it's a warning or error
+            if level in ["warning", "error"]:
+                try:
+                    # Use "warning" or "error" as box_type
+                    if hasattr(self, 'job_log_widget_1'):
+                        self.job_log_widget_1.add_message(level, message, level)
+                    if hasattr(self, 'job_log_widget_2'):
+                        self.job_log_widget_2.add_message(level, message, level)
+                except Exception as e:
+                    pass
+
+        # Keep backward compatibility with old textLogger (not used with new JobLogWidget)
+        # Left here for reference if needed
+        pass
+    
+    def update_job_status_indicator(self, level="info"):
+        """Update the status indicator for the current job"""
+        if self.current_job_id is not None:
+            color_map = {
+                "info": "#2196F3",
+                "success": "#4CAF50",
+                "warning": "#FF9800",
+                "error": "#F44336"
+            }
+            color = color_map.get(level, "#666666")
+            
+            try:
+                if hasattr(self, 'job_log_widget_1'):
+                    self.job_log_widget_1.update_status(self.current_job_id, level.upper(), color)
+                if hasattr(self, 'job_log_widget_2'):
+                    self.job_log_widget_2.update_status(self.current_job_id, level.upper(), color)
+            except Exception as e:
+                pass
+    
+    def update_validation_status(self, message, level="warning"):
+        """Update status for validation messages (always goes to general warning/error boxes)"""
+        # Add timestamp and format the message
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        formatted_message = f"{level.upper()}: {message}"
+        formatted_message_with_timestamp = f"[{timestamp}] {formatted_message}"
+
+        # Check for duplicate: identical level and message (ignoring timestamp)
+        if formatted_message not in self._cached_messages:
+            self._cached_messages.append(formatted_message)
+            self.status_messages.append(formatted_message_with_timestamp)
+
+        # Always add validation messages to general warning/error boxes (ignore current_job_id)
+        if level in ["warning", "error"]:
+            try:
+                if hasattr(self, 'job_log_widget_1'):
+                    self.job_log_widget_1.add_message(level, message, level)
+                if hasattr(self, 'job_log_widget_2'):
+                    self.job_log_widget_2.add_message(level, message, level)
+            except Exception as e:
+                pass
+
+    # ------------------------------------------------------------------------------------------------
+    # Cleanup events when closing the dialog
+    # ------------------------------------------------------------------------------------------------
+
+    def closeEvent(self, event):
+        """Ensure the thread is stopped when the dialog is closed."""
+        try:
+            # Stop token validation timer
+            self.token_timer.stop()
+
+            if self.thread and self.thread.isRunning():
+                self.worker.stop()
+                self.thread.quit()
+                self.thread.wait()  # Wait for the thread to finish
+
+            # Stop jobs monitoring
+            if self.jobs_thread and self.jobs_thread.isRunning():
+                self.jobs_worker.stop()
+                self.jobs_thread.quit()
+                self.jobs_thread.wait()
+        except:
+            pass
+
+        event.accept()
+
+    def cleanup_thread(self):
+        """
+        Cleans up thread and worker references after the thread has finished.
+        This slot is connected to the thread's finished signal.
+        """
+        # Hide loading indicator
+        self.requestLoadingLabel.setVisible(False)
+
+        # Clear current job ID after thread finishes
+        self.current_job_id = None
+
+        # Set the Python references to None
+        self.thread = None
+        self.worker = None
         
-        # Clear saved credentials file
-        self.clear_saved_credentials()
-
-        # Stop jobs monitoring
-        if self.jobs_thread and self.jobs_thread.isRunning():
-            self.jobs_worker.stop()
-            self.jobs_thread.quit()
-            self.jobs_thread.wait()
-        # Disable all tabs except login
-        self.tabWidget.setTabEnabled(1, False)
-        self.tabWidget.setTabEnabled(2, False)
-        self.tabWidget.setTabEnabled(3, False)
-
-        # Switch to login tab
-        self.tabWidget.setCurrentIndex(0)
-
-        # Update login status
-        self.loginInfoLabel.setText("Please login again.")
-        self.loginPushButton.setEnabled(True)
-        self.logoutButton.setEnabled(False)
-        
-        # Clear username and password fields
-        if hasattr(self, "usernameLineEdit"):
-            self.usernameLineEdit.clear()
-        if hasattr(self, "passwordLineEdit"):
-            self.passwordLineEdit.clear()
-
-        # Clear jobs table
-        if hasattr(self, "jobsTableWidget"):
-            self.jobsTableWidget.setRowCount(0)
-
-    def on_aoi_method_changed(self):
-        """Handle changes in AOI method selection (draw rectangle vs select polygon vs map extent)"""
-        if self.drawRectangleRadioButton.isChecked():
-            # Show drawing controls, hide polygon layer combo box
-            self.show_drawing_controls()
-            self.polygonLayerComboBox.setVisible(False)
-        elif self.selectPolygonRadioButton.isChecked():
-            # Hide drawing controls, show polygon layer combo box
-            self.hide_drawing_controls()
-            self.polygonLayerComboBox.setVisible(True)
-        else:  # useMapExtentRadioButton is checked
-            # Hide both drawing controls and polygon layer combo box
-            self.hide_drawing_controls()
-            self.polygonLayerComboBox.setVisible(False)
-
-        # Re-validate the form
+        # Re-validate the form to enable/disable the button appropriately
         self.validate_form_request()
 
-    def show_drawing_controls(self):
-        """Show the drawing controls"""
-        # Create a simple widget with draw/clear buttons
-        if self.bboxWidget is None:
-            from PyQt5.QtWidgets import (
-                QWidget,
-                QVBoxLayout,
-                QHBoxLayout,
-                QPushButton,
-                QLabel,
+    def cleanup_temp_dirs(self):
+        """
+        This function is called when QGIS is about to quit.
+        It safely removes all temporary directories created during the session.
+        """
+        try:
+            self.update_status(
+                f"Cleaning up {len(self.temp_dirs_to_clean)} temporary directories",
+                "info",
+            )
+            for dir_path in self.temp_dirs_to_clean:
+                try:
+                    # shutil.rmtree can remove a directory and all its contents
+                    shutil.rmtree(dir_path)
+                except Exception as e:
+                    # Log an error but don't prevent QGIS from closing
+                    print(f"Could not remove temporary directory {dir_path}")
+                    self.update_status(
+                        f"Warning: Could not remove temp dir at location {dir_path}",
+                        "warning",
+                    )
+
+            self.temp_dirs_to_clean.clear()
+        except Exception as e:
+            # Log an error but don't prevent QGIS from closing
+            print(f"Could not remove temporary directory {dir_path}")
+            self.update_status(
+                f"Warning: Could not remove temp dir at location {dir_path}", "warning"
             )
 
-            self.bboxWidget = QWidget()
-            layout = QVBoxLayout(self.bboxWidget)
+        self.temp_dirs_to_clean.clear()
 
-            # Instructions
-            instructions = QLabel("Click 'Draw Rectangle' to draw on the map")
-            instructions.setWordWrap(True)
-            layout.addWidget(instructions)
+    # ------------------------------------------------------------------------------------------------
+    # Setup UI elements (request and from layer tabs)
+    # ------------------------------------------------------------------------------------------------
 
-            # Button layout
-            button_layout = QHBoxLayout()
-
-            self.drawButton = QPushButton("Draw Rectangle")
-            self.drawButton.clicked.connect(self.start_drawing)
-            button_layout.addWidget(self.drawButton)
-
-            self.clearButton = QPushButton("Clear Rectangle")
-            self.clearButton.clicked.connect(self.clear_drawing)
-            self.clearButton.setEnabled(False)
-            button_layout.addWidget(self.clearButton)
-
-            layout.addLayout(button_layout)
-
-            # Status label
-            self.statusLabel = QLabel("No rectangle drawn")
-            layout.addWidget(self.statusLabel)
-
-            # Insert the widget into the layout
-            self.aoiMethodLayout.insertWidget(2, self.bboxWidget)
-
-        if self.bboxWidget:
-            self.bboxWidget.setVisible(True)
-
-    def hide_drawing_controls(self):
-        """Hide the drawing controls"""
-        if self.bboxWidget:
-            self.bboxWidget.setVisible(False)
-
-        # Deactivate drawing tool if active
-        if self.rectangleMapTool:
-
-            iface.mapCanvas().unsetMapTool(self.rectangleMapTool)
-            self.rectangleMapTool = None
-
-    def start_drawing(self):
-        """Start drawing mode"""
-
-        if not iface:
-            self.statusLabel.setText("Error: QGIS interface not available")
-            return
-
-        # Create and set the map tool
-        self.rectangleMapTool = RectangleMapTool(iface.mapCanvas(), self)
-        iface.mapCanvas().setMapTool(self.rectangleMapTool)
-
-        self.statusLabel.setText("Click and drag on the map to draw rectangle...")
-
-    def clear_drawing(self):
-        """Clear the drawn rectangle"""
-        if self.rectangleMapTool:
-            self.rectangleMapTool.clear_rectangle()
-
-        self.current_bbox = None
-        self.statusLabel.setText("No rectangle drawn")
-        self.clearButton.setEnabled(False)
-
-        # Re-validate the form
-        self.validate_form_request()
-
-    def set_bbox_from_draw(self, minx, miny, maxx, maxy):
-        """Called by RectangleMapTool when a rectangle is drawn"""
-        self.current_bbox = (minx, miny, maxx, maxy)
-
-        # Update UI
-        self.drawButton.setText("Draw New Rectangle")
-        self.clearButton.setEnabled(True)
-        self.statusLabel.setText(
-            f"Rectangle drawn: {minx:.6f}, {miny:.6f} to {maxx:.6f}, {maxy:.6f}"
-        )
-
-        # Deactivate map tool
-
-        iface.mapCanvas().unsetMapTool(self.rectangleMapTool)
-        self.rectangleMapTool = None
-
-        # Re-validate the form
-        self.validate_form_request()
+    def setup_job_log_widgets(self):
+        """Replace textLogger widgets with JobLogWidget"""
+        # Replace textLogger in Request tab with JobLogWidget
+        if hasattr(self, 'textLogger'):
+            # Get the parent widget and its grid layout
+            text_logger_parent = self.textLogger.parent()
+            if text_logger_parent:
+                layout = text_logger_parent.layout()
+                if layout and isinstance(layout, QtWidgets.QGridLayout):
+                    # Find the position of textLogger in the grid
+                    index = layout.indexOf(self.textLogger)
+                    if index >= 0:
+                        row, col, rowspan, colspan = layout.getItemPosition(index)
+                        
+                        # Remove textLogger
+                        layout.removeWidget(self.textLogger)
+                        self.textLogger.setParent(None)
+                        self.textLogger.deleteLater()
+                        
+                        # Create new JobLogWidget and add it at the same position
+                        self.job_log_widget_1 = JobLogWidget()
+                        layout.addWidget(self.job_log_widget_1, row, col, rowspan, colspan)
+        
+        # Replace textLogger2 in From Layer tab with JobLogWidget
+        if hasattr(self, 'textLogger2'):
+            # Get the parent widget and its grid layout
+            text_logger_parent = self.textLogger2.parent()
+            if text_logger_parent:
+                layout = text_logger_parent.layout()
+                if layout and isinstance(layout, QtWidgets.QGridLayout):
+                    # Find the position of textLogger2 in the grid
+                    index = layout.indexOf(self.textLogger2)
+                    if index >= 0:
+                        row, col, rowspan, colspan = layout.getItemPosition(index)
+                        
+                        # Remove textLogger2
+                        layout.removeWidget(self.textLogger2)
+                        self.textLogger2.setParent(None)
+                        self.textLogger2.deleteLater()
+                        
+                        # Create new JobLogWidget and add it at the same position
+                        self.job_log_widget_2 = JobLogWidget()
+                        layout.addWidget(self.job_log_widget_2, row, col, rowspan, colspan)
 
     def setup_loading_indicators(self):
         """Setup loading indicators for the Get Layer buttons"""
