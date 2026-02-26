@@ -19,6 +19,8 @@ class MainWorker(QObject):
     log_separator = pyqtSignal()
     # Used for ERROR logging
     error = pyqtSignal(str)
+    # Final outcome: True = success, False = error (emitted before finished)
+    job_ended = pyqtSignal(bool)
 
     def __init__(
         self,
@@ -161,10 +163,12 @@ class MainWorker(QObject):
                             # Emit also the datatype_id associated to the job
                             datatype_id = job_status.get("body", {}).get("datatype_id")
                             self.layer_ready.emit(local_path, datatype_id)
+                            self.job_ended.emit(True)
                         else:
                             self.error.emit(
                                 "Job completed but no resource URL provided"
                             )
+                            self.job_ended.emit(False)
                         break
                     elif status == "error":
                         # Job failed
@@ -179,6 +183,7 @@ class MainWorker(QObject):
                             self.error.emit(
                                 f"Job {self.job_id} Error: {status_code} - {result}"
                             )
+                            self.job_ended.emit(False)
                             self.log_separator.emit()
                             break
                     elif status in ["pending", "start", "update"]:
@@ -191,16 +196,19 @@ class MainWorker(QObject):
                         self.error.emit(
                             f"Job {self.job_id} Unknown job status: {status}"
                         )
+                        self.job_ended.emit(False)
                         self.log_separator.emit()
                         break
 
                 except requests.exceptions.RequestException as e:
                     self.error.emit(f"API request error: {e}")
+                    self.job_ended.emit(False)
                     self.log_separator.emit()
                     break
 
         except Exception as e:
             self.error.emit(f"Worker Error: {e}")
+            self.job_ended.emit(False)
         finally:
             self.finished.emit()
 

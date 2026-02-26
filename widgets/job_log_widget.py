@@ -206,9 +206,8 @@ class JobLogWidget(QWidget):
         
         layout.addWidget(scroll_area)
     
-    def _get_or_create_box(self, box_type="warning"):
-        """Get or create a message box"""
- 
+    def _get_or_create_box(self, box_type="warning", pipeline=None):
+        """Get or create a message box. For job boxes, pipeline is used in the title when provided."""
         if box_type not in self.message_boxes:
             if box_type == "error":
                 color = "#FF746C"
@@ -224,7 +223,7 @@ class JobLogWidget(QWidget):
                 # Job box
                 color = "#F5F5F5"
                 prefix = "📋"
-                title = f"Job {box_type}"
+                title = f"Job {box_type} - {pipeline}" if pipeline else f"Job {box_type}"
                 is_expanded = False
             
             self.message_boxes[box_type] = BaseMessageBox(
@@ -233,8 +232,9 @@ class JobLogWidget(QWidget):
                 prefix=prefix,
                 is_expanded=is_expanded
             )
+            # Accept clicked(checked) argument so bt keeps the captured box_type
             self.message_boxes[box_type].close_button.clicked.connect(
-                lambda bt=box_type: self.remove_box(bt)
+                lambda checked, bt=box_type: self.remove_box(bt)
             )
             
             # Insert at the appropriate position
@@ -265,9 +265,9 @@ class JobLogWidget(QWidget):
             self.message_boxes[box_type].deleteLater()
             del self.message_boxes[box_type]
     
-    def add_message(self, box_type, message, level="warning"):
-        """Add a message to a specific box"""
-        box = self._get_or_create_box(box_type)
+    def add_message(self, box_type, message, level="warning", pipeline=None):
+        """Add a message to a specific box. pipeline is used for job box title when creating the box."""
+        box = self._get_or_create_box(box_type, pipeline=pipeline)
         box.add_message(message, level)
     
     def update_status(self, box_type, status_text, color="black"):

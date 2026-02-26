@@ -273,6 +273,10 @@ class ErmesQGISDialog(QDockWidget):
 
         # Track current job ID for logging
         self.current_job_id = None
+        # Job ID -> pipeline name (for job log box titles from Request tab)
+        self._job_pipeline = {}
+        # Job ID -> final outcome (True=success, False=error) set by worker.job_ended
+        self._job_outcome = {}
 
         self.credentials_path = os.path.join(
             os.path.dirname(__file__), self.config.credentials_file
@@ -695,12 +699,32 @@ class ErmesQGISDialog(QDockWidget):
             self.jobsTableWidget.verticalHeader().setVisible(False)
 
     def _format_job_date(self, value):
-        """Format ISO datetime string for table display (e.g. 2024-06-15T12:00:00 -> 2024-06-15)."""
+        """Format ISO datetime string as date only for table display (e.g. 2024-06-15T12:00:00 -> 2024-06-15)."""
         if not value:
             return ""
         if isinstance(value, str) and "T" in value:
             return value.split("T")[0]
+        if isinstance(value, str):
+            return value[:10] if len(value) >= 10 else value
         return str(value)
+
+    def _format_job_datetime(self, value):
+        """Format ISO datetime for table display without milliseconds (e.g. 2024-06-15T14:30:00.123Z -> 2024-06-15 14:30:00)."""
+        if not value:
+            return ""
+        s = str(value).strip()
+        if not s:
+            return ""
+        # Strip timezone suffix and fractional seconds for display
+        if "." in s:
+            s = s.split(".")[0]
+        if s.endswith("Z"):
+            s = s[:-1]
+        # Strip +00:00 or similar
+        if "+" in s:
+            s = s.split("+")[0].strip()
+        s = s.replace("T", " ")
+        return s
 
     def update_jobs_table(self, jobs):
         """Update the jobs table with the latest jobs data"""
@@ -733,10 +757,19 @@ class ErmesQGISDialog(QDockWidget):
                 row, 3, QTableWidgetItem(job.get("result", ""))
             )
             self.jobsTableWidget.setItem(
-                row, 4, QTableWidgetItem(job.get("created_at", ""))
+                row,
+                4,
+                QTableWidgetItem(
+                    self._format_job_datetime(job.get("created_at", ""))
+                    or ""
+                ),
             )
-            self.jobsTableWidget.setItem(row, 5, QTableWidgetItem(start_date))
-            self.jobsTableWidget.setItem(row, 6, QTableWidgetItem(end_date))
+            self.jobsTableWidget.setItem(
+                row, 5, QTableWidgetItem(self._format_job_date(start_date) or "")
+            )
+            self.jobsTableWidget.setItem(
+                row, 6, QTableWidgetItem(self._format_job_date(end_date) or "")
+            )
             self.jobsTableWidget.setItem(
                 row, 7, QTableWidgetItem(self._format_job_date(acq) if acq else "")
             )
@@ -1272,7 +1305,8 @@ class ErmesQGISDialog(QDockWidget):
             # Use the saved access token for authentication
             headers = {"Authorization": f"Bearer {self.access_token}"}
 
-            job_ids = []
+            job_ids = []  # list of (job_id, pipeline_text)
+            job_pipeline_pairs = []
 
             # Create a job for each selected layer type
             for item in selected_items:
@@ -1297,6 +1331,7 @@ class ErmesQGISDialog(QDockWidget):
                     job_result = job_response.json()
                     job_id = job_result["id"]
                     job_ids.append(job_id)
+                    job_pipeline_pairs.append((job_id, pipeline_text))
                     self.update_status(
                         f"Job created with ID: {job_id} for {pipeline_text}", "info"
                     )
@@ -1318,8 +1353,8 @@ class ErmesQGISDialog(QDockWidget):
                     return
 
             # Start monitoring all jobs
-            for job_id in job_ids:
-                self.start_listening(job_id)
+            for job_id, pipeline_text in job_pipeline_pairs:
+                self.start_listening(job_id, pipeline_text=pipeline_text)
 
             self.update_status(f"Started monitoring {len(job_ids)} job(s)", "info")
 
@@ -1553,8 +1588,10 @@ class ErmesQGISDialog(QDockWidget):
     # ------------------------------------------------------------------------------------------------
     # Job monitoring (request and from layer tabs)
     # ------------------------------------------------------------------------------------------------
-    def start_listening(self, job_id):
+    def start_listening(self, job_id, pipeline_text=None):
         """Set up the worker and thread to start monitoring the job."""
+        if pipeline_text is not None:
+            self._job_pipeline[job_id] = pipeline_text
         # Create a QThread
         thread = QThread()
         # Create a worker
@@ -1587,6 +1624,9 @@ class ErmesQGISDialog(QDockWidget):
         worker.error.connect(
             lambda msg: self.update_status_for_job(job_id, msg, "error")
         )
+        worker.job_ended.connect(
+            lambda success: self._store_job_outcome(job_id, success)
+        )
 
         # Add to lists
         self.threads.append(thread)
@@ -1603,6 +1643,10 @@ class ErmesQGISDialog(QDockWidget):
         self.update_status_for_job(
             job_id, f"Started monitoring job {job_id}...", "info"
         )
+
+    def _store_job_outcome(self, job_id, success):
+        """Store the final outcome for a job (used by cleanup_thread)."""
+        self._job_outcome[job_id] = success
 
     def load_layer(self, file_path, datatype_id=None):
         """Loads the downloaded file into QGIS. This runs on the main thread."""
@@ -1839,7 +1883,7 @@ class ErmesQGISDialog(QDockWidget):
     # Status updates (request and from layer tabs)
     # ------------------------------------------------------------------------------------------------
 
-    def update_status_for_job(self, job_id, message, level="info"):
+    def update_status_for_job(self, job_id, message, level="info", pipeline=None):
         """
         Updates the status for a specific job ID.
         This creates/updates a BaseMessageBox for the given job.
@@ -1847,6 +1891,7 @@ class ErmesQGISDialog(QDockWidget):
         :param job_id: The job ID to update
         :param message: The status message
         :param level: The message level (info, warning, error, success)
+        :param pipeline: Optional pipeline name for the job box title (uses _job_pipeline if not passed)
         """
         # Add timestamp and format the message
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -1858,12 +1903,14 @@ class ErmesQGISDialog(QDockWidget):
             self._cached_messages.append(formatted_message)
             self.status_messages.append(formatted_message_with_timestamp)
 
+        pipeline_for_widget = pipeline if pipeline is not None else self._job_pipeline.get(job_id)
+
         # Add to job log widgets using the job_id as box_type
         try:
             if hasattr(self, "job_log_widget_1"):
-                self.job_log_widget_1.add_message(str(job_id), message, level)
+                self.job_log_widget_1.add_message(str(job_id), message, level, pipeline=pipeline_for_widget)
             if hasattr(self, "job_log_widget_2"):
-                self.job_log_widget_2.add_message(str(job_id), message, level)
+                self.job_log_widget_2.add_message(str(job_id), message, level, pipeline=pipeline_for_widget)
 
             # Update job status indicator
             color_map = {
@@ -2016,8 +2063,13 @@ class ErmesQGISDialog(QDockWidget):
         if worker in self.workers:
             self.workers.remove(worker)
 
-        # Update the job's status to completed
-        self.update_status_for_job(job_id, f"Job {job_id} completed", "success")
+        # Update the job's status from stored outcome (success or error)
+        success = self._job_outcome.get(job_id, False)
+        if success:
+            self.update_status_for_job(job_id, f"Job {job_id} completed", "success")
+        else:
+            self.update_status_for_job(job_id, f"Job {job_id} failed", "error")
+        self._job_outcome.pop(job_id, None)
 
         # If all jobs are finished, hide loading indicator
         if not self.has_active_jobs():
