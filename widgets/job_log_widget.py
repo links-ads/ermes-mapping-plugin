@@ -1,13 +1,151 @@
 # -*- coding: utf-8 -*-
 """
-Job Log Widget - Custom widget for displaying job status with expandable logs
+Job Log Widget - Compact job status rows with tick-on-message progress and full logs in dialog
 """
 
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QPushButton, QScrollArea,
-    QFrame, QHBoxLayout, QTextEdit
+    QWidget, QVBoxLayout, QLabel, QPushButton, QFrame, QHBoxLayout,
+    QProgressBar, QPlainTextEdit, QDialog, QDialogButtonBox, QTextEdit,
 )
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFontMetrics
+
+
+# Tick-on-message progress: band 10..90, step 7, wrap at 90 -> 30
+_PROGRESS_STEP = 7
+_PROGRESS_MIN = 10
+_PROGRESS_MAX_RUNNING = 90
+_PROGRESS_WRAP = 30
+
+
+class JobRowWidget(QWidget):
+    """Compact single row per job: title, last message, status pill, progress bar, + and X buttons."""
+
+    def __init__(self, box_type, title, parent=None):
+        super().__init__(parent)
+        self.box_type = box_type
+        self.title_text = title
+        self.messages = []  # list of (message, level) for full log dialog
+        self._progress_value = _PROGRESS_MIN
+        self._finished = False  # once True, progress stays at 100
+        self.setup_ui()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 2, 4, 2)
+        layout.setSpacing(2)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+
+        self.title_label = QLabel(self.title_text)
+        self.title_label.setStyleSheet("font-weight: bold; font-size: 11px; color: black;")
+        self.title_label.setMinimumWidth(120)
+        row.addWidget(self.title_label)
+
+        self.last_message_label = QLabel("")
+        self.last_message_label.setStyleSheet("font-size: 10px; color: #333;")
+        self.last_message_label.setMinimumWidth(80)
+        self.last_message_label.setSizePolicy(
+            self.last_message_label.sizePolicy().horizontalPolicy(),
+            self.last_message_label.sizePolicy().verticalPolicy(),
+        )
+        row.addWidget(self.last_message_label, 1)
+
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet(
+            "font-size: 9px; font-weight: bold; padding: 2px 6px; border-radius: 3px;"
+        )
+        self.status_label.setMinimumWidth(52)
+        row.addWidget(self.status_label)
+
+        self.logs_button = QPushButton("+")
+        self.logs_button.setToolTip("Show full logs")
+        self.logs_button.setStyleSheet("""
+            QPushButton { border: none; background: transparent; font-size: 14px; min-width: 22px; max-width: 22px; }
+            QPushButton:hover { background: #E0E0E0; border-radius: 3px; }
+        """)
+        self.logs_button.clicked.connect(self.open_logs_dialog)
+        row.addWidget(self.logs_button)
+
+        self.close_button = QPushButton("\u2715")
+        self.close_button.setToolTip("Remove this job row")
+        self.close_button.setStyleSheet("""
+            QPushButton { border: none; background: transparent; font-size: 14px; min-width: 22px; max-width: 22px; }
+            QPushButton:hover { color: #D32F2F; }
+        """)
+        row.addWidget(self.close_button)
+
+        layout.addLayout(row)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(self._progress_value)
+        self.progress_bar.setMinimumHeight(6)
+        self.progress_bar.setMaximumHeight(8)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar { border: 1px solid #CCC; border-radius: 2px; text-align: center; }
+            QProgressBar::chunk { background: #2196F3; }
+        """)
+        layout.addWidget(self.progress_bar)
+
+        self.setFrameStyle(QFrame.StyledPanel)
+        self.setStyleSheet("QFrame { background-color: #F5F5F5; border: 1px solid #DDD; border-radius: 3px; }")
+
+    def add_message(self, message, level="info", display_message=None):
+        if (message, level) in self.messages:
+            return
+        self.messages.append((message, level))
+        text_for_preview = (display_message if display_message is not None else message)
+        formatted = f"[{level.upper()}] {text_for_preview}"
+        self.last_message_label.setText(self._elide(formatted))
+        self.last_message_label.setToolTip(f"[{level.upper()}] {message}")
+        if not self._finished:
+            self._progress_value = min(_PROGRESS_MAX_RUNNING, self._progress_value + _PROGRESS_STEP)
+            if self._progress_value >= _PROGRESS_MAX_RUNNING:
+                self._progress_value = _PROGRESS_WRAP
+            self.progress_bar.setValue(self._progress_value)
+
+    def _elide(self, text, width=None):
+        if width is None:
+            width = self.last_message_label.width() if self.last_message_label.width() > 20 else 200
+        return QFontMetrics(self.last_message_label.font()).elidedText(
+            text, Qt.ElideRight, max(20, width)
+        )
+
+    def set_status(self, status_text, color="black"):
+        self.status_label.setText(status_text)
+        self.status_label.setStyleSheet(
+            f"font-size: 9px; font-weight: bold; padding: 2px 6px; border-radius: 3px; color: {color};"
+        )
+        if status_text.upper() in ("SUCCESS", "ERROR"):
+            self._finished = True
+            self.progress_bar.setValue(100)
+            if status_text.upper() == "SUCCESS":
+                self.progress_bar.setStyleSheet("""
+                    QProgressBar { border: 1px solid #CCC; border-radius: 2px; }
+                    QProgressBar::chunk { background: #4CAF50; }
+                """)
+            else:
+                self.progress_bar.setStyleSheet("""
+                    QProgressBar { border: 1px solid #CCC; border-radius: 2px; }
+                    QProgressBar::chunk { background: #F44336; }
+                """)
+
+    def open_logs_dialog(self):
+        d = QDialog(self.window())
+        d.setWindowTitle(f"Logs — {self.title_text}")
+        layout = QVBoxLayout(d)
+        te = QPlainTextEdit()
+        te.setReadOnly(True)
+        te.setStyleSheet("font-family: monospace; font-size: 11px;")
+        full_text = "\n".join(f"[{lev.upper()}] {msg}" for msg, lev in self.messages)
+        te.setPlainText(full_text or "(no messages)")
+        layout.addWidget(te)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok)
+        bb.accepted.connect(d.accept)
+        layout.addWidget(bb)
+        d.exec_()
 
 
 class BaseMessageBox(QWidget):
@@ -173,127 +311,104 @@ class BaseMessageBox(QWidget):
 
 
 class JobLogWidget(QWidget):
-    """Main widget for displaying all job logs with expandable boxes"""
-    
+    """Compact job rows (tick-on-message progress) and legacy warning/error boxes; no nested scroll."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.message_boxes = {}  # job_id -> ExpandableJobBox
+        self.message_boxes = {}  # box_type -> BaseMessageBox or JobRowWidget
         self.setup_ui()
-    
+
     def setup_ui(self):
-        """Setup the UI"""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Set minimum height for the widget
-        self.setMinimumHeight(300)
-        
-        # Create scroll area for the job boxes
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        
-        # Container widget for job boxes
-        self.container = QWidget()
-        self.container_layout = QVBoxLayout()
-        self.container_layout.setContentsMargins(5, 5, 5, 5)
-        #self.container_layout.setSpacing(5)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(4)
+        self.setMinimumHeight(120)
+        self.container_layout = layout
+        # No internal QScrollArea; parent tab scroll handles scrolling
         self.container_layout.addStretch()
-        
-        self.container.setLayout(self.container_layout)
-        scroll_area.setWidget(self.container)
-        
-        layout.addWidget(scroll_area)
-    
+
     def _get_or_create_box(self, box_type="warning", pipeline=None):
-        """Get or create a message box. For job boxes, pipeline is used in the title when provided."""
         if box_type not in self.message_boxes:
             if box_type == "error":
                 color = "#FF746C"
-                prefix = "❌"
+                prefix = "\u2716"
                 title = "Errors"
                 is_expanded = True
+                self.message_boxes[box_type] = BaseMessageBox(
+                    title=title, color=color, prefix=prefix, is_expanded=is_expanded
+                )
+                self.message_boxes[box_type].close_button.clicked.connect(
+                    lambda checked, bt=box_type: self.remove_box(bt)
+                )
             elif box_type == "warning":
                 color = "#FFEE8C"
-                prefix = "⚠️"
+                prefix = "\u26a0"
                 title = "Warnings"
                 is_expanded = True
+                self.message_boxes[box_type] = BaseMessageBox(
+                    title=title, color=color, prefix=prefix, is_expanded=is_expanded
+                )
+                self.message_boxes[box_type].close_button.clicked.connect(
+                    lambda checked, bt=box_type: self.remove_box(bt)
+                )
             else:
-                # Job box
-                color = "#F5F5F5"
-                prefix = "📋"
                 title = f"Job {box_type} - {pipeline}" if pipeline else f"Job {box_type}"
-                is_expanded = False
-            
-            self.message_boxes[box_type] = BaseMessageBox(
-                title=title, 
-                color=color, 
-                prefix=prefix,
-                is_expanded=is_expanded
-            )
-            # Accept clicked(checked) argument so bt keeps the captured box_type
-            self.message_boxes[box_type].close_button.clicked.connect(
-                lambda checked, bt=box_type: self.remove_box(bt)
-            )
-            
-            # Insert at the appropriate position
+                self.message_boxes[box_type] = JobRowWidget(box_type, title)
+                self.message_boxes[box_type].close_button.clicked.connect(
+                    lambda checked, bt=box_type: self.remove_box(bt)
+                )
+
             insert_pos = 0
-            # Errors at top
             if box_type == "error":
                 insert_pos = 0
-            # Warnings after errors
             elif box_type == "warning":
-                if "error" in self.message_boxes:
-                    insert_pos = 1
-                else:
-                    insert_pos = 0
-            # Jobs after warnings and errors
+                insert_pos = 1 if "error" in self.message_boxes else 0
             else:
-                for key in ["error", "warning"]:
-                    if key in self.message_boxes:
-                        insert_pos += 1
-            
+                insert_pos = sum(1 for k in ["error", "warning"] if k in self.message_boxes)
             self.container_layout.insertWidget(insert_pos, self.message_boxes[box_type])
-            
         return self.message_boxes[box_type]
-    
+
     def remove_box(self, box_type="warning"):
-        """Remove a specific box"""
         if box_type in self.message_boxes:
             self.container_layout.removeWidget(self.message_boxes[box_type])
             self.message_boxes[box_type].deleteLater()
             del self.message_boxes[box_type]
-    
-    def add_message(self, box_type, message, level="warning", pipeline=None):
-        """Add a message to a specific box. pipeline is used for job box title when creating the box."""
+
+    def add_message(self, box_type, message, level="warning", pipeline=None, display_message=None):
         box = self._get_or_create_box(box_type, pipeline=pipeline)
-        box.add_message(message, level)
-    
+        if isinstance(box, JobRowWidget):
+            box.add_message(message, level, display_message=display_message)
+        else:
+            box.add_message(message, level)
+
     def update_status(self, box_type, status_text, color="black"):
-        """Update the status of a specific box"""
-        if box_type in self.message_boxes:
-            self.message_boxes[box_type].update_status(status_text, color)
-    
+        if box_type not in self.message_boxes:
+            return
+        w = self.message_boxes[box_type]
+        if isinstance(w, JobRowWidget):
+            w.set_status(status_text, color)
+        else:
+            w.update_status(status_text, color)
+
     def expand_box(self, box_type):
-        """Expand a specific box"""
-        if box_type in self.message_boxes and not self.message_boxes[box_type].is_expanded:
-            self.message_boxes[box_type].toggle_expand()
-    
+        if box_type in self.message_boxes and hasattr(self.message_boxes[box_type], "toggle_expand"):
+            w = self.message_boxes[box_type]
+            if not w.is_expanded:
+                w.toggle_expand()
+
     def collapse_box(self, box_type):
-        """Collapse a specific box""" 
-        if box_type in self.message_boxes and self.message_boxes[box_type].is_expanded:
-            self.message_boxes[box_type].toggle_expand()
-    
+        if box_type in self.message_boxes and hasattr(self.message_boxes[box_type], "toggle_expand"):
+            w = self.message_boxes[box_type]
+            if w.is_expanded:
+                w.toggle_expand()
+
     def clear_box(self, box_type):
-        """Clear logs for a specific box"""
         if box_type in self.message_boxes:
             self.container_layout.removeWidget(self.message_boxes[box_type])
             self.message_boxes[box_type].deleteLater()
             del self.message_boxes[box_type]
-    
+
     def clear_all_logs(self):
-        """Clear all boxes"""
         for box_type in list(self.message_boxes.keys()):
             self.clear_box(box_type)
 

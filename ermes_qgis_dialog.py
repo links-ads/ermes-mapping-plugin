@@ -1905,12 +1905,25 @@ class ErmesQGISDialog(QDockWidget):
 
         pipeline_for_widget = pipeline if pipeline is not None else self._job_pipeline.get(job_id)
 
-        # Add to job log widgets using the job_id as box_type
+        # Shorten preview only: strip redundant "Job {id} status:" / "Job {id} " prefix
+        display_message = message
+        prefix1 = f"Job {job_id} status: "
+        prefix2 = f"Job {job_id} "
+        if message.startswith(prefix1):
+            display_message = message[len(prefix1) :].strip()
+        elif message.startswith(prefix2):
+            display_message = message[len(prefix2) :].strip()
+
+        # Add to job log widgets using the job_id as box_type (full message for logs, display_message for preview)
         try:
             if hasattr(self, "job_log_widget_1"):
-                self.job_log_widget_1.add_message(str(job_id), message, level, pipeline=pipeline_for_widget)
+                self.job_log_widget_1.add_message(
+                    str(job_id), message, level, pipeline=pipeline_for_widget, display_message=display_message
+                )
             if hasattr(self, "job_log_widget_2"):
-                self.job_log_widget_2.add_message(str(job_id), message, level, pipeline=pipeline_for_widget)
+                self.job_log_widget_2.add_message(
+                    str(job_id), message, level, pipeline=pipeline_for_widget, display_message=display_message
+                )
 
             # Update job status indicator
             color_map = {
