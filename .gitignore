@@ -156,3 +156,4 @@ cython_debug/
 # Secrets
 certs/
 .credentials
+zip_build/

@@ -1,13 +1,12 @@
 import os
 import time
-import requests
 import tempfile
+import requests
 from PyQt5.QtCore import QObject, pyqtSignal
 from .token_manager import TokenManager
 
 
 class MainWorker(QObject):
-
     # FLAGS
     # Signals when Worker is finished, triggers clean-up and closes thread
     finished = pyqtSignal()
@@ -27,23 +26,17 @@ class MainWorker(QObject):
         username: str,
         password: str,
         job_id: int,
-        config,
+        config=None,
     ):
         super().__init__()
         self.api_base_url = api_base_url
         self.username = username
         self.password = password
         self.job_id = job_id
+        self.config = config
         self.access_token = None
         self.is_running = True
-        self.config = config
         self.token_manager = TokenManager(api_base_url, config)
-        
-        # Get polling intervals from config
-        self.polling_interval = self.config.polling_interval_seconds
-        self.error_sleep_seconds = self.config.polling_error_sleep_seconds
-        self.chunk_size = self.config.processing_chunk_size
-        self.cache_dir_name = self.config.cache_dir_name
 
     def _authenticate(self):
         """
@@ -58,7 +51,7 @@ class MainWorker(QObject):
             return {"Authorization": f"Bearer {self.access_token}"}
 
         # Token is expired or doesn't exist, get a new one
-        auth_url = f"{self.api_base_url}{self.config.api_endpoints['login']}"
+        auth_url = f"{self.api_base_url}/auth/login"
         data = {
             "username": self.username,
             "password": self.password,
@@ -83,7 +76,7 @@ class MainWorker(QObject):
         :raises HTTPError: If the request fails.
         """
         headers = self._authenticate()
-        status_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_detail'].format(job_id=self.job_id)}"
+        status_url = f"{self.api_base_url}/jobs/{self.job_id}"
 
         response = requests.get(status_url, headers=headers)
         response.raise_for_status()
@@ -98,7 +91,7 @@ class MainWorker(QObject):
         :return: The local cache path where the downloaded resource is saved.
         :raises HTTPError: If the HTTP request to the URL fails.
         """
-        retrieve_url = f"{self.api_base_url}{self.config.api_endpoints['retrieve'].format(job_id=self.job_id)}"
+        retrieve_url = f"{self.api_base_url}/retrieve/{self.job_id}"
         self.status_updated.emit(
             f"Job {self.job_id} status: success - Request completed, downloading layer"
         )
@@ -117,12 +110,14 @@ class MainWorker(QObject):
                 filename = f"{self.job_id}.zip"
 
             # Use system temp directory to avoid permission issues
-            cache_dir = os.path.join(tempfile.gettempdir(), self.cache_dir_name, str(self.job_id))
+            cache_dir = os.path.join(
+                tempfile.gettempdir(), "ermes_qgis", str(self.job_id)
+            )
             os.makedirs(cache_dir, exist_ok=True)
             cache_path = os.path.join(cache_dir, filename)
 
             with open(cache_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=self.chunk_size):
+                for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
 
@@ -150,6 +145,18 @@ class MainWorker(QObject):
                     if status == "end":
                         # Job completed successfully
                         if job_status.get("resource_url"):
+                            # Log acquisition_date and granule_id when present
+                            acq = job_status.get("acquisition_date")
+                            gid = job_status.get("granule_id")
+                            if acq is not None or gid is not None:
+                                parts = []
+                                if acq is not None:
+                                    parts.append(f"acquisition_date={acq}")
+                                if gid is not None:
+                                    parts.append(f"granule_id={gid}")
+                                self.status_updated.emit(
+                                    f"Job {self.job_id} image metadata: {', '.join(parts)}"
+                                )
                             local_path = self._download_resource()
                             # Emit also the datatype_id associated to the job
                             datatype_id = job_status.get("body", {}).get("datatype_id")
@@ -167,7 +174,7 @@ class MainWorker(QObject):
                             self.status_updated.emit(
                                 f"Job {self.job_id} Warning: {result}"
                             )
-                            time.sleep(self.error_sleep_seconds)
+                            time.sleep(5)
                         else:
                             self.error.emit(
                                 f"Job {self.job_id} Error: {status_code} - {result}"
@@ -179,7 +186,7 @@ class MainWorker(QObject):
                         self.status_updated.emit(
                             f"Job {self.job_id} status: {status} - {result} "
                         )
-                        time.sleep(self.polling_interval)
+                        time.sleep(1)
                     else:
                         self.error.emit(
                             f"Job {self.job_id} Unknown job status: {status}"
