@@ -18,7 +18,7 @@ _PROGRESS_MAX_RUNNING = 90
 _PROGRESS_WRAP = 30
 
 
-class JobRowWidget(QWidget):
+class JobRowWidget(QFrame):
     """Compact single row per job: title, last message, status pill, progress bar, + and X buttons."""
 
     def __init__(self, box_type, title, parent=None):
@@ -34,6 +34,7 @@ class JobRowWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(2)
+        self.setMinimumHeight(44)
 
         row = QHBoxLayout()
         row.setSpacing(6)
@@ -90,7 +91,7 @@ class JobRowWidget(QWidget):
         layout.addWidget(self.progress_bar)
 
         self.setFrameStyle(QFrame.StyledPanel)
-        self.setStyleSheet("QFrame { background-color: #F5F5F5; border: 1px solid #DDD; border-radius: 3px; }")
+        self.setStyleSheet("JobRowWidget, QFrame { background-color: #F5F5F5; border: 1px solid #DDD; border-radius: 3px; }")
 
     def add_message(self, message, level="info", display_message=None):
         if (message, level) in self.messages:
@@ -322,9 +323,15 @@ class JobLogWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(4)
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(140)
+        self.setStyleSheet("QWidget { background-color: #FAFAFA; border: 1px solid #E0E0E0; border-radius: 3px; }")
         self.container_layout = layout
-        # No internal QScrollArea; parent tab scroll handles scrolling
+        # Placeholder so the log area is visible when empty (avoids collapsing to zero height)
+        self.placeholder = QLabel("Job logs will appear here when you run a request.")
+        self.placeholder.setStyleSheet("color: #666; font-size: 10px; padding: 8px;")
+        self.placeholder.setAlignment(Qt.AlignCenter)
+        self.placeholder.setMinimumHeight(80)
+        self.container_layout.addWidget(self.placeholder)
         self.container_layout.addStretch()
 
     def _get_or_create_box(self, box_type="warning", pipeline=None):
@@ -366,6 +373,7 @@ class JobLogWidget(QWidget):
             else:
                 insert_pos = sum(1 for k in ["error", "warning"] if k in self.message_boxes)
             self.container_layout.insertWidget(insert_pos, self.message_boxes[box_type])
+            self.placeholder.setVisible(False)
         return self.message_boxes[box_type]
 
     def remove_box(self, box_type="warning"):
@@ -373,6 +381,8 @@ class JobLogWidget(QWidget):
             self.container_layout.removeWidget(self.message_boxes[box_type])
             self.message_boxes[box_type].deleteLater()
             del self.message_boxes[box_type]
+            if not self.message_boxes:
+                self.placeholder.setVisible(True)
 
     def add_message(self, box_type, message, level="warning", pipeline=None, display_message=None):
         box = self._get_or_create_box(box_type, pipeline=pipeline)
@@ -407,6 +417,8 @@ class JobLogWidget(QWidget):
             self.container_layout.removeWidget(self.message_boxes[box_type])
             self.message_boxes[box_type].deleteLater()
             del self.message_boxes[box_type]
+            if not self.message_boxes:
+                self.placeholder.setVisible(True)
 
     def clear_all_logs(self):
         for box_type in list(self.message_boxes.keys()):

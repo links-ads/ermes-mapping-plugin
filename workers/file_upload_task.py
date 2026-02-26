@@ -120,6 +120,23 @@ class FileUploadTask(QgsTask):
                     )
                     response.raise_for_status()
 
+                except requests.exceptions.HTTPError as http_err:
+                    err_response = getattr(http_err, "response", None)
+                    if err_response is not None:
+                        try:
+                            err_body = err_response.json()
+                            detail = err_body.get("detail", str(err_body))
+                        except Exception:
+                            detail = err_response.text or str(http_err)
+                        if err_response.status_code == 429:
+                            self.error_message = f"Too many active jobs: {detail}"
+                        else:
+                            self.error_message = f"API error ({err_response.status_code}): {detail}"
+                    else:
+                        self.error_message = str(http_err)
+                    self.status_update.emit(self.error_message, "error")
+                    self.upload_failed.emit(self.error_message)
+                    return False
                 except requests.exceptions.Timeout:
                     self.error_message = (
                         "Upload timeout - the file may be too large or server is slow"

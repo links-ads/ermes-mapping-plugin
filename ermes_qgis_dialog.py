@@ -146,6 +146,7 @@ class ErmesQGISDialog(QDockWidget):
         # Worker utils - changed to lists to support multiple concurrent jobs
         self.threads = []  # List of threads monitoring jobs
         self.workers = []  # List of workers monitoring jobs
+        self._upload_tasks_in_flight = 0  # File upload tasks started but not yet completed/failed
 
         # Jobs tab worker utils
         self.jobs_thread = None
@@ -649,12 +650,22 @@ class ErmesQGISDialog(QDockWidget):
     # Helper methods for job monitoring
     # ------------------------------------------------------------------------------------------------
     def has_active_jobs(self):
-        """Check if any jobs are currently being monitored"""
+        """Check if any jobs are currently being monitored (threads only; uploads tracked separately)."""
         # Clean up any finished threads first
         self.threads = [t for t in self.threads if t.isRunning()]
         self.workers = [w for w in self.workers if not w.property("finished")]
-
         return len(self.threads) > 0
+
+    def _in_flight_count(self):
+        """Return number of in-flight jobs: monitoring threads + upload tasks not yet completed."""
+        self.threads = [t for t in self.threads if t.isRunning()]
+        self.workers = [w for w in self.workers if not w.property("finished")]
+        return len(self.threads) + self._upload_tasks_in_flight
+
+    def _at_concurrent_limit(self):
+        """True if user is at the max concurrent jobs limit (should wait before new requests)."""
+        max_jobs = getattr(self.config, "max_concurrent_jobs", 5)
+        return self._in_flight_count() >= max_jobs
 
     # ------------------------------------------------------------------------------------------------
     # Jobs Tab
@@ -1258,14 +1269,6 @@ class ErmesQGISDialog(QDockWidget):
             self.update_status("Error: Please login before making a request.", "error")
             return
 
-        # Check if any jobs are currently running
-        if self.has_active_jobs():
-            self.update_validation_status(
-                "Cannot start new jobs while other jobs are already running and being monitored.",
-                "warning",
-            )
-            return
-
         # Check token validity before making request
         if not self.token_manager.check_and_handle_expiration():
             self.perform_logout()
@@ -1308,14 +1311,11 @@ class ErmesQGISDialog(QDockWidget):
             job_ids = []  # list of (job_id, pipeline_text)
             job_pipeline_pairs = []
 
-            # Create a job for each selected layer type
+            job_url = (
+                f"{self.api_base_url}{self.config.api_endpoints['jobs_create']}"
+            )
             for item in selected_items:
                 pipeline_text = item.data(Qt.UserRole)
-
-                # Create job request
-                job_url = (
-                    f"{self.api_base_url}{self.config.api_endpoints['jobs_create']}"
-                )
                 job_data = {
                     "datatype_id": self.pipeline_map[pipeline_text],
                     "geometry": geometry,
@@ -1331,42 +1331,55 @@ class ErmesQGISDialog(QDockWidget):
                     job_result = job_response.json()
                     job_id = job_result["id"]
                     job_ids.append(job_id)
-                    job_pipeline_pairs.append((job_id, pipeline_text))
                     self.update_status(
                         f"Job created with ID: {job_id} for {pipeline_text}", "info"
                     )
+                    # Start monitoring this job immediately so partial 429 still monitors earlier jobs
+                    self.start_listening(job_id, pipeline_text=pipeline_text)
                 except requests.exceptions.HTTPError as http_err:
-                    # Only handle 400 with extra details
-                    if job_response is not None and job_response.status_code == 400:
+                    job_response = getattr(http_err, "response", None)
+                    if job_response is not None:
                         try:
-                            details = job_response.json()
+                            err_body = job_response.json()
+                            detail = err_body.get("detail", str(err_body))
                         except Exception:
-                            details = job_response.text
-                        self.update_status(
-                            f"Bad request: {details.get('detail', details)}", "error"
-                        )
+                            detail = job_response.text or str(http_err)
+                        if job_response.status_code == 429:
+                            self.update_status(
+                                f"Too many active jobs: {detail}", "warning"
+                            )
+                            break
+                        if job_response.status_code == 400:
+                            self.update_status(f"Bad request: {detail}", "error")
+                        else:
+                            self.update_status(f"HTTP error: {detail}", "error")
                     else:
-                        self.update_status(f"HTTP error occurred: {http_err}", "error")
-                    return
+                        self.update_status(f"HTTP error: {http_err}", "error")
+                    break
                 except Exception as e:
                     self.update_status(f"Error sending request: {e}", "error")
-                    return
+                    break
 
-            # Start monitoring all jobs
-            for job_id, pipeline_text in job_pipeline_pairs:
-                self.start_listening(job_id, pipeline_text=pipeline_text)
-
-            self.update_status(f"Started monitoring {len(job_ids)} job(s)", "info")
+            if job_ids:
+                self.update_status(f"Started monitoring {len(job_ids)} job(s)", "info")
+            self.validate_form_request()
+            self.validate_form_from_layer()
 
         except Exception as e:
             self.update_status(f"Error sending request: {e}", "error")
+            self.validate_form_request()
+            self.validate_form_from_layer()
 
     # Validate form (request tab)
     def validate_form_request(self):
         """Validates the form and enables/disables the request button accordingly"""
-        # FIRST CHECK: If any jobs are currently being monitored, keep button disabled
-        if self.has_active_jobs():
+        max_jobs = getattr(self.config, "max_concurrent_jobs", 5)
+        if self._at_concurrent_limit():
             self.requestPushButton.setEnabled(False)
+            self.update_validation_status(
+                f"You already have {self._in_flight_count()} active job(s). Maximum is {max_jobs}. Please wait for some to finish.",
+                "warning",
+            )
             return
 
         # Check if all required fields are filled
@@ -1442,14 +1455,6 @@ class ErmesQGISDialog(QDockWidget):
             self.update_status("Error: Please login before making a request.", "error")
             return
 
-        # Check if any jobs are currently running
-        if self.has_active_jobs():
-            self.update_validation_status(
-                "Cannot start new jobs while other jobs are already running and being monitored.",
-                "warning",
-            )
-            return
-
         # Retrieve user inputs
         self.update_status("Retrieving user layers...")
         selected_layer = self.rasterLayerComboBox.currentLayer()
@@ -1523,8 +1528,10 @@ class ErmesQGISDialog(QDockWidget):
             upload_task.upload_completed.connect(self.on_file_upload_completed)
             upload_task.upload_failed.connect(self.on_file_upload_failed)
 
-            # Disable button during upload and show loading indicator
-            self.requestFilePushButton.setEnabled(False)
+            # Track in-flight upload; button state updated by validate_form_*
+            self._upload_tasks_in_flight += 1
+            self.validate_form_request()
+            self.validate_form_from_layer()
             self.fromLayerLoadingLabel.setVisible(True)
             self.update_status_for_job(
                 temp_job_id, f"Job created and started for: {filename}", "info"
@@ -1557,11 +1564,14 @@ class ErmesQGISDialog(QDockWidget):
 
         except Exception as e:
             self.update_status(f"Error starting file upload: {e}", "error")
-            self.requestFilePushButton.setEnabled(True)
-            self.fromLayerLoadingLabel.setVisible(False)
+            self._upload_tasks_in_flight = max(0, self._upload_tasks_in_flight - 1)
+            self.fromLayerLoadingLabel.setVisible(self._upload_tasks_in_flight > 0)
+            self.validate_form_request()
+            self.validate_form_from_layer()
 
     def on_file_upload_completed(self, temp_file_path: str, datatype_id: str):
         """Handle successful file upload completion"""
+        self._upload_tasks_in_flight = max(0, self._upload_tasks_in_flight - 1)
         try:
             self.update_status(
                 "File upload completed successfully. Loading result into QGIS...",
@@ -1572,18 +1582,20 @@ class ErmesQGISDialog(QDockWidget):
             # Clear current job ID after completion
             self.current_job_id = None
 
-            self.requestFilePushButton.setEnabled(True)
-            self.fromLayerLoadingLabel.setVisible(False)
+            self.fromLayerLoadingLabel.setVisible(self._upload_tasks_in_flight > 0)
         except Exception as e:
             self.update_status(f"Error loading uploaded file result: {e}", "error")
-            self.requestFilePushButton.setEnabled(True)
-            self.fromLayerLoadingLabel.setVisible(False)
+        finally:
+            self.validate_form_request()
+            self.validate_form_from_layer()
 
     def on_file_upload_failed(self, error_message: str):
         """Handle file upload failure"""
+        self._upload_tasks_in_flight = max(0, self._upload_tasks_in_flight - 1)
         self.update_status(error_message, "error")
-        self.requestFilePushButton.setEnabled(True)
-        self.fromLayerLoadingLabel.setVisible(False)
+        self.fromLayerLoadingLabel.setVisible(self._upload_tasks_in_flight > 0)
+        self.validate_form_request()
+        self.validate_form_from_layer()
 
     # ------------------------------------------------------------------------------------------------
     # Job monitoring (request and from layer tabs)
@@ -1635,9 +1647,10 @@ class ErmesQGISDialog(QDockWidget):
         # Start the thread
         thread.start()
 
-        # Disable button and show loading indicator
-        self.requestPushButton.setEnabled(False)
+        # Show loading indicator when any job is running (button state updated by validate_form_*)
         self.requestLoadingLabel.setVisible(True)
+        self.validate_form_request()
+        self.validate_form_from_layer()
 
         # Create the BaseMessageBox for this job
         self.update_status_for_job(
@@ -1824,9 +1837,13 @@ class ErmesQGISDialog(QDockWidget):
 
     def validate_form_from_layer(self):
         """Validates the form and enables/disables the request button accordingly"""
-        # FIRST CHECK: If any jobs are currently being monitored, keep button disabled
-        if self.has_active_jobs():
+        max_jobs = getattr(self.config, "max_concurrent_jobs", 5)
+        if self._at_concurrent_limit():
             self.requestFilePushButton.setEnabled(False)
+            self.update_validation_status(
+                f"You already have {self._in_flight_count()} active job(s). Maximum is {max_jobs}. Please wait for some to finish.",
+                "warning",
+            )
             return
 
         selected_layer = self.rasterLayerComboBox.currentLayer()
@@ -2089,8 +2106,9 @@ class ErmesQGISDialog(QDockWidget):
             self.requestLoadingLabel.setVisible(False)
             self.update_status("All jobs completed", "success")
 
-        # Re-validate the form to enable/disable the button appropriately
+        # Re-validate both forms to update button states
         self.validate_form_request()
+        self.validate_form_from_layer()
 
     def cleanup_temp_dirs(self):
         """

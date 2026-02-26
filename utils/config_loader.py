@@ -67,6 +67,11 @@ class ConfigLoader:
         return self._config.get('api', {}).get('base_url', '')
     
     @property
+    def max_concurrent_jobs(self) -> int:
+        """Get maximum concurrent active jobs per user (request + from-layer)."""
+        return self._config.get('api', {}).get('max_concurrent_jobs', 5)
+
+    @property
     def api_endpoints(self) -> Dict[str, str]:
         """Get API endpoints."""
         return self._config.get('api', {}).get('endpoints', {})

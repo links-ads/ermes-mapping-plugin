@@ -5,7 +5,9 @@
 # API Configuration
 api:
   base_url: "https://loki.linksfoundation.com/ermes-plugin"
-  
+  # Maximum concurrent active jobs per user (request + from-layer). Server enforces the same limit.
+  max_concurrent_jobs: 5
+
   # API Endpoints
   endpoints:
     login: "/auth/login"
