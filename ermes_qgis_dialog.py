@@ -243,6 +243,8 @@ class ErmesQGISDialog(QDockWidget):
         self.api_base_url = self.config.api_base_url
         self.pipeline_info = self.config.get_pipeline_info()
         self.pipeline_map = self.config.get_pipeline_map()
+        # Reverse map: pipeline id -> display name (for jobs table)
+        self.pipeline_id_to_name = {v: k for k, v in self.pipeline_map.items()}
         self.image_type_map = self.config.image_type_map
         self.style_root = self.config.style_root
         self.style_map = self.config.style_map
@@ -511,33 +513,44 @@ class ErmesQGISDialog(QDockWidget):
         """Setup the jobs table with appropriate columns"""
         # Assuming the table is named jobsTableWidget
         if hasattr(self, "jobsTableWidget"):
-            self.jobsTableWidget.setColumnCount(7)
+            self.jobsTableWidget.setColumnCount(9)
             self.jobsTableWidget.setHorizontalHeaderLabels(
                 [
                     "ID",
-                    "Pipeline",
+                    "Layer Type",
                     "Status",
                     "Status Message",
                     "Created",
                     "Start Date",
                     "End Date",
+                    "Acquisition Date",
+                    "Granule ID",
                 ]
             )
 
             # Set column widths
             header = self.jobsTableWidget.horizontalHeader()
             header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID
-            header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Pipeline
+            header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Layer Type
             header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Status
-            header.setSectionResizeMode(
-                3, QHeaderView.ResizeToContents
-            )  # Status Message
+            header.setSectionResizeMode(3, QHeaderView.Fixed)  # Status Message (fixed, reduced width)
+            header.resizeSection(3, 160)
             header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Created
             header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Start Date
             header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # End Date
+            header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Acquisition Date
+            header.setSectionResizeMode(8, QHeaderView.ResizeToContents)  # Granule ID
 
             # Hide the vertical header (row numbers)
             self.jobsTableWidget.verticalHeader().setVisible(False)
+
+    def _format_job_date(self, value):
+        """Format ISO datetime string for table display (e.g. 2024-06-15T12:00:00 -> 2024-06-15)."""
+        if not value:
+            return ""
+        if isinstance(value, str) and "T" in value:
+            return value.split("T")[0]
+        return str(value)
 
     def update_jobs_table(self, jobs):
         """Update the jobs table with the latest jobs data"""
@@ -552,14 +565,17 @@ class ErmesQGISDialog(QDockWidget):
             self.jobsTableWidget.insertRow(row)
 
             datatype_id = job.get("body", {}).get("datatype_id", "")
+            display_name = self.pipeline_id_to_name.get(datatype_id, datatype_id)
             start_date = job.get("body", {}).get("start_date", "")
             end_date = job.get("body", {}).get("end_date", "")
+            acq = job.get("acquisition_date")
+            granule_id = job.get("granule_id")
 
             # Add job data to table
             self.jobsTableWidget.setItem(
                 row, 0, QTableWidgetItem(str(job.get("id", "")))
             )
-            self.jobsTableWidget.setItem(row, 1, QTableWidgetItem(datatype_id))
+            self.jobsTableWidget.setItem(row, 1, QTableWidgetItem(display_name))
             self.jobsTableWidget.setItem(
                 row, 2, QTableWidgetItem(job.get("status", ""))
             )
@@ -571,6 +587,12 @@ class ErmesQGISDialog(QDockWidget):
             )
             self.jobsTableWidget.setItem(row, 5, QTableWidgetItem(start_date))
             self.jobsTableWidget.setItem(row, 6, QTableWidgetItem(end_date))
+            self.jobsTableWidget.setItem(
+                row, 7, QTableWidgetItem(self._format_job_date(acq) if acq else "")
+            )
+            self.jobsTableWidget.setItem(
+                row, 8, QTableWidgetItem(str(granule_id) if granule_id else "")
+            )
 
             self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
 
