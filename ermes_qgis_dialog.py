@@ -22,7 +22,6 @@
  ***************************************************************************/
 """
 
-
 import os
 import requests
 import shutil
@@ -53,6 +52,10 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
+    QDialog,
+    QFormLayout,
+    QLineEdit,
+    QMessageBox,
 )
 from qgis.PyQt.QtCore import QThread, QTimer
 from PyQt5.QtGui import QPixmap, QIcon
@@ -70,6 +73,7 @@ from .workers.token_manager import TokenManager
 
 # Import the BoundingBoxWidget
 from .widgets.bbox_widget import RectangleMapTool
+
 # Import the JobLogWidget
 from .widgets.job_log_widget import JobLogWidget
 
@@ -174,11 +178,12 @@ class ErmesQGISDialog(QDockWidget):
         self.setup_jobs_table()
         # Setup layer type list widget
         self.setup_layer_type_list()
-        
+
         # Connect UI signals to methods
         # Login
         self.loginPushButton.clicked.connect(self.login)
         self.logoutButton.clicked.connect(self.perform_logout)
+        self.forgotPasswordButton.clicked.connect(self._open_reset_password_dialog)
         # Request
         self.startDateLineEdit.mousePressEvent = lambda _: self.move_calendar(
             "start_date"
@@ -224,13 +229,13 @@ class ErmesQGISDialog(QDockWidget):
 
         # Initialize AOI method
         self.on_aoi_method_changed()
-        
+
         # Load saved credentials if they exist
         self.load_credentials()
-        
+
         # Setup loading indicators for the "Get Layer" buttons
         self.setup_loading_indicators()
-        
+
         # Setup job log widgets after all UI elements are loaded
         self.setup_job_log_widgets()
 
@@ -238,7 +243,7 @@ class ErmesQGISDialog(QDockWidget):
         """Initialize plugin-specific data and settings"""
         # Setup for API
         self.active_time = None
-        
+
         # Load configuration values
         self.api_base_url = self.config.api_base_url
         self.pipeline_info = self.config.get_pipeline_info()
@@ -248,11 +253,10 @@ class ErmesQGISDialog(QDockWidget):
         self.image_type_map = self.config.image_type_map
         self.style_root = self.config.style_root
         self.style_map = self.config.style_map
-        
+
         self.username = None  # Will be set when user logs in
         self.password = None  # Will be set when user logs in
         self.access_token = None  # Will be set after successful login
-        
 
         # Initialize layer type list widget (needed since it doesn't work when doing it in the UI file)
         self.polygonLayerComboBox.setFilters(QgsMapLayerProxyModel.PolygonLayer)
@@ -266,20 +270,22 @@ class ErmesQGISDialog(QDockWidget):
         # Initialize status messages list
         self.status_messages = []
         self._cached_messages = []
-        
+
         # Track current job ID for logging
         self.current_job_id = None
 
-        self.credentials_path = os.path.join( os.path.dirname(__file__), self.config.credentials_file)
+        self.credentials_path = os.path.join(
+            os.path.dirname(__file__), self.config.credentials_file
+        )
 
         # Setup job log widgets (replace textLogger) - do this after UI is loaded
         # This will be called in _initialize_plugin
         self.setup_job_log_widgets()
-    
+
     # ------------------------------------------------------------------------------------------------
     # Login Tab
     # ------------------------------------------------------------------------------------------------
-    
+
     # Credentials handling methods
     def save_credentials(self, username, password):
         """
@@ -287,23 +293,19 @@ class ErmesQGISDialog(QDockWidget):
         This is used to save the credentials for auto-login.
         """
         try:
-        
             # Encode credentials (basic obfuscation, not secure encryption)
             encoded_username = base64.b64encode(username.encode()).decode()
             encoded_password = base64.b64encode(password.encode()).decode()
-            
-            credentials = {
-                "username": encoded_username,
-                "password": encoded_password
-            }
-            
-            with open(self.credentials_path, 'w') as f:
+
+            credentials = {"username": encoded_username, "password": encoded_password}
+
+            with open(self.credentials_path, "w") as f:
                 json.dump(credentials, f)
-                
+
         except Exception as e:
             # Don't fail if we can't save credentials, just log it
             print(f"Could not save credentials: {e}")
-    
+
     def load_credentials(self):
         """Load credentials from file if it exists.
         This is used to load the credentials for auto-login.
@@ -311,24 +313,24 @@ class ErmesQGISDialog(QDockWidget):
         try:
             if not os.path.exists(self.credentials_path):
                 return
-            
-            with open(self.credentials_path, 'r') as f:
+
+            with open(self.credentials_path, "r") as f:
                 credentials = json.load(f)
-            
+
             # Decode credentials
             username = base64.b64decode(credentials["username"].encode()).decode()
             password = base64.b64decode(credentials["password"].encode()).decode()
-            
+
             # Set the credentials in the UI
             if hasattr(self, "usernameLineEdit"):
                 self.usernameLineEdit.setText(username)
             if hasattr(self, "passwordLineEdit"):
                 self.passwordLineEdit.setText(password)
-                
+
         except Exception as e:
             # Don't fail if we can't load credentials, just continue
             print(f"Could not load credentials: {e}")
-    
+
     def clear_saved_credentials(self):
         """Delete the saved credentials file"""
         try:
@@ -378,7 +380,7 @@ class ErmesQGISDialog(QDockWidget):
             # Save credentials for later use
             self.username = username
             self.password = password
-            
+
             # Save credentials to file for auto-login
             self.save_credentials(username, password)
 
@@ -443,6 +445,150 @@ class ErmesQGISDialog(QDockWidget):
             self.loginInfoLabel.setText(f"Login failed: Internal error {e}")
             self.loginPushButton.setEnabled(True)
 
+    def _open_reset_password_dialog(self):
+        """Open a dialog to request a password reset and set a new password."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Reset password")
+        layout = QFormLayout()
+        dialog.setLayout(layout)
+
+        username_edit = QLineEdit()
+        username_edit.setPlaceholderText("Username or email")
+        username_edit.setMinimumWidth(280)
+        layout.addRow("Username or email:", username_edit)
+
+        request_btn = QPushButton("Request reset token")
+        layout.addRow("", request_btn)
+
+        status_label = QLabel("Enter your username or email and click Request reset token.")
+        status_label.setWordWrap(True)
+        status_label.setStyleSheet("color: #555;")
+        layout.addRow(status_label)
+
+        token_edit = QLineEdit()
+        token_edit.setPlaceholderText("Paste the token you received")
+        token_edit.setMinimumWidth(280)
+        token_edit.setEchoMode(QLineEdit.Normal)
+        token_label = QLabel("Reset token:")
+        new_pass_edit = QLineEdit()
+        new_pass_edit.setPlaceholderText("New password")
+        new_pass_edit.setEchoMode(QLineEdit.Password)
+        confirm_pass_edit = QLineEdit()
+        confirm_pass_edit.setPlaceholderText("Confirm new password")
+        confirm_pass_edit.setEchoMode(QLineEdit.Password)
+        reset_btn = QPushButton("Reset password")
+
+        # Initially hide token + password section
+        token_label.setVisible(False)
+        token_edit.setVisible(False)
+        new_pass_edit.setVisible(False)
+        confirm_pass_edit.setVisible(False)
+        reset_btn.setVisible(False)
+        layout.addRow(token_label, token_edit)
+        layout.addRow("New password:", new_pass_edit)
+        layout.addRow("Confirm password:", confirm_pass_edit)
+        layout.addRow("", reset_btn)
+
+        reset_token_value = [None]  # use list so inner function can assign
+
+        def on_request_reset():
+            username = username_edit.text().strip()
+            if not username:
+                status_label.setText("Please enter your username or email.")
+                status_label.setStyleSheet("color: #c62828;")
+                return
+            request_btn.setEnabled(False)
+            status_label.setText("Requesting reset token...")
+            status_label.setStyleSheet("color: #555;")
+            try:
+                url = f"{self.api_base_url}{self.config.api_endpoints['request_password_reset']}"
+                resp = requests.post(url, json={"username": username})
+                resp.raise_for_status()
+                data = resp.json()
+                token = data.get("reset_token") if isinstance(data, dict) else None
+                if token:
+                    reset_token_value[0] = token
+                    token_edit.setText(token)
+                    token_label.setVisible(True)
+                    token_edit.setVisible(True)
+                    new_pass_edit.setVisible(True)
+                    confirm_pass_edit.setVisible(True)
+                    reset_btn.setVisible(True)
+                    status_label.setText(
+                        f"Token generated. It expires in {data.get('expires_in_minutes', 60)} minutes. "
+                        "Enter your new password below and click Reset password."
+                    )
+                    status_label.setStyleSheet("color: #2e7d32;")
+                else:
+                    status_label.setText(
+                        "If an account exists for this username or email, a reset token has been generated. "
+                        "Check your username and try again, or use the token if you received it elsewhere."
+                    )
+                    status_label.setStyleSheet("color: #555;")
+            except requests.HTTPError as e:
+                try:
+                    err = e.response.json()
+                    detail = err.get("detail", str(err))
+                except Exception:
+                    detail = e.response.text or str(e)
+                status_label.setText(f"Request failed: {detail}")
+                status_label.setStyleSheet("color: #c62828;")
+            except requests.RequestException as e:
+                status_label.setText(f"Request failed: {e}")
+                status_label.setStyleSheet("color: #c62828;")
+            finally:
+                request_btn.setEnabled(True)
+
+        def on_reset_password():
+            token = token_edit.text().strip()
+            new_pass = new_pass_edit.text().strip()
+            confirm = confirm_pass_edit.text().strip()
+            if not token:
+                status_label.setText("Please enter the reset token.")
+                status_label.setStyleSheet("color: #c62828;")
+                return
+            if not new_pass or not confirm:
+                status_label.setText("Please enter and confirm your new password.")
+                status_label.setStyleSheet("color: #c62828;")
+                return
+            if new_pass != confirm:
+                status_label.setText("New password and confirmation do not match.")
+                status_label.setStyleSheet("color: #c62828;")
+                return
+            reset_btn.setEnabled(False)
+            status_label.setText("Resetting password...")
+            status_label.setStyleSheet("color: #555;")
+            try:
+                url = f"{self.api_base_url}{self.config.api_endpoints['reset_password']}"
+                resp = requests.post(
+                    url,
+                    json={"reset_token": token, "new_password": new_pass},
+                )
+                resp.raise_for_status()
+                QMessageBox.information(
+                    dialog,
+                    "Password reset",
+                    "Your password has been reset. You can now log in with your new password.",
+                )
+                dialog.accept()
+            except requests.HTTPError as e:
+                try:
+                    err = e.response.json()
+                    detail = err.get("detail", str(err))
+                except Exception:
+                    detail = e.response.text or str(e)
+                status_label.setText(f"Reset failed: {detail}")
+                status_label.setStyleSheet("color: #c62828;")
+            except requests.RequestException as e:
+                status_label.setText(f"Reset failed: {e}")
+                status_label.setStyleSheet("color: #c62828;")
+            finally:
+                reset_btn.setEnabled(True)
+
+        request_btn.clicked.connect(on_request_reset)
+        reset_btn.clicked.connect(on_reset_password)
+        dialog.exec_()
+
     def check_token_validity(self):
         """Check if the current token is still valid and handle expiration"""
         if not self.access_token:
@@ -463,7 +609,7 @@ class ErmesQGISDialog(QDockWidget):
         self.username = None
         self.password = None
         self.token_manager.clear_token()
-        
+
         # Clear saved credentials file
         self.clear_saved_credentials()
 
@@ -484,7 +630,7 @@ class ErmesQGISDialog(QDockWidget):
         self.loginInfoLabel.setText("Please login again.")
         self.loginPushButton.setEnabled(True)
         self.logoutButton.setEnabled(False)
-        
+
         # Clear username and password fields
         if hasattr(self, "usernameLineEdit"):
             self.usernameLineEdit.clear()
@@ -502,10 +648,10 @@ class ErmesQGISDialog(QDockWidget):
         """Check if any jobs are currently being monitored"""
         # Clean up any finished threads first
         self.threads = [t for t in self.threads if t.isRunning()]
-        self.workers = [w for w in self.workers if not w.property('finished')]
-        
+        self.workers = [w for w in self.workers if not w.property("finished")]
+
         return len(self.threads) > 0
-    
+
     # ------------------------------------------------------------------------------------------------
     # Jobs Tab
     # ------------------------------------------------------------------------------------------------
@@ -533,12 +679,16 @@ class ErmesQGISDialog(QDockWidget):
             header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID
             header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Layer Type
             header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Status
-            header.setSectionResizeMode(3, QHeaderView.Fixed)  # Status Message (fixed, reduced width)
+            header.setSectionResizeMode(
+                3, QHeaderView.Fixed
+            )  # Status Message (fixed, reduced width)
             header.resizeSection(3, 160)
             header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Created
             header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Start Date
             header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # End Date
-            header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Acquisition Date
+            header.setSectionResizeMode(
+                7, QHeaderView.ResizeToContents
+            )  # Acquisition Date
             header.setSectionResizeMode(8, QHeaderView.ResizeToContents)  # Granule ID
 
             # Hide the vertical header (row numbers)
@@ -596,49 +746,47 @@ class ErmesQGISDialog(QDockWidget):
 
             self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
 
-
     def download_selected_jobs(self):
         """Download and load the selected job from the Jobs Table into QGIS"""
         # Get the currently selected row
         selected_items = self.jobsTableWidget.selectedItems()
-        
+
         if not selected_items:
             self.update_status("No job selected for download.", "warning")
             return
-        
+
         # Get the first selected item (only one row can be selected)
         row = selected_items[0].row()
-        
+
         try:
             # Get job data from the table
             job_item = self.jobsTableWidget.item(row, 0)
             if not job_item:
                 self.update_status("Error: Could not retrieve job data.", "error")
                 return
-            
+
             job_data = job_item.data(Qt.UserRole)
             job_id = job_data.get("id")
             job_status = job_data.get("status")
             resource_url = job_data.get("resource_url")
-            
+
             # Check if job can be downloaded
             if job_status != "end":
                 self.update_status(
                     f"Job {job_id} cannot be downloaded yet. Current status: {job_status}",
-                    "warning"
+                    "warning",
                 )
                 return
-            
+
             if not resource_url:
                 self.update_status(
-                    f"Job {job_id} has no resource available for download.",
-                    "warning"
+                    f"Job {job_id} has no resource available for download.", "warning"
                 )
                 return
-            
+
             # Start asynchronous download
             self.start_job_download_task(job_id)
-            
+
         except Exception as e:
             self.update_status(
                 f"Internal error processing job from row {row}: {e}", "error"
@@ -648,7 +796,7 @@ class ErmesQGISDialog(QDockWidget):
         """Start a QgsTask for downloading the job resource asynchronously"""
         try:
             description = f"Downloading job {job_id}"
-            
+
             # Create the download task
             download_task = JobDownloadTask(
                 description=description,
@@ -664,11 +812,15 @@ class ErmesQGISDialog(QDockWidget):
             task_manager.addTask(download_task)
 
             # Connect signals for safe communication - use lambda to bind job_id
-            download_task.status_update.connect(lambda msg, lvl="info": self.update_status_for_job(job_id, msg, lvl))
+            download_task.status_update.connect(
+                lambda msg, lvl="info": self.update_status_for_job(job_id, msg, lvl)
+            )
             download_task.download_completed.connect(self.on_job_download_completed)
             download_task.download_failed.connect(self.on_job_download_failed)
 
-            self.update_status_for_job(job_id, f"Starting download for job {job_id}...", "info")
+            self.update_status_for_job(
+                job_id, f"Starting download for job {job_id}...", "info"
+            )
 
         except Exception as e:
             self.update_status(f"Error starting job download: {e}", "error")
@@ -706,7 +858,6 @@ class ErmesQGISDialog(QDockWidget):
         except Exception as e:
             self.update_status(f"Internal error refreshing jobs table", "error")
 
-
     # ------------------------------------------------------------------------------------------------
     # Layer type list (request tab)
     # ------------------------------------------------------------------------------------------------
@@ -714,44 +865,49 @@ class ErmesQGISDialog(QDockWidget):
         """Setup the layer type list widget with images and descriptions"""
         if hasattr(self, "layerTypeListWidget"):
             self.layerTypeListWidget.clear()
-            
+
             # Enable multi-selection
             from PyQt5.QtWidgets import QAbstractItemView
+
             self.layerTypeListWidget.setSelectionMode(QAbstractItemView.MultiSelection)
-            
+
             # Get the base path for images (plugin root directory)
             base_path = os.path.dirname(__file__)
-            
+
             for layer_name, layer_data in self.pipeline_info.items():
                 # Create list widget item
                 item = QListWidgetItem()
-                
+
                 # Set the icon (look in plugin root directory)
-                icon_path = os.path.join(base_path, self.config.images_directory, layer_data["image"])
+                icon_path = os.path.join(
+                    base_path, self.config.images_directory, layer_data["image"]
+                )
                 if os.path.exists(icon_path):
                     item.setIcon(QIcon(icon_path))
                 else:
                     # Use default QGIS icon as placeholder
                     item.setIcon(QIcon(":/images/themes/default/mIconRaster.svg"))
-                
+
                 # Set the text with name and description
                 item.setText(f"{layer_name}\n{layer_data['description']}")
-                
+
                 # Store the layer name as user data for easy retrieval
                 item.setData(Qt.UserRole, layer_name)
-                
+
                 # Set tooltip
                 item.setToolTip(f"{layer_name}: {layer_data['description']}")
-                
+
                 # Add item to list
                 self.layerTypeListWidget.addItem(item)
-            
+
             # Select the first item (Sentinel-1 image) by default
             if self.layerTypeListWidget.count() > 0:
                 self.layerTypeListWidget.setCurrentRow(0)
-            
+
             # Connect selection change signal
-            self.layerTypeListWidget.itemSelectionChanged.connect(self.validate_form_request)
+            self.layerTypeListWidget.itemSelectionChanged.connect(
+                self.validate_form_request
+            )
 
     def start_jobs_monitoring(self):
         """Start monitoring jobs from the API"""
@@ -767,7 +923,9 @@ class ErmesQGISDialog(QDockWidget):
         self.jobs_thread = QThread()
         # Create a jobs worker
         self.jobs_worker = JobsWorker(
-            api_base_url=self.api_base_url, access_token=self.access_token, config=self.config
+            api_base_url=self.api_base_url,
+            access_token=self.access_token,
+            config=self.config,
         )
 
         # Move worker to the thread
@@ -797,10 +955,10 @@ class ErmesQGISDialog(QDockWidget):
                 "success",
             )
             self.load_layer(file_path, datatype_id)
-            
+
             # Clear current job ID after completion
             self.current_job_id = None
-            
+
         except Exception as e:
             self.update_status(f"Error loading downloaded job result: {e}", "error")
             self.current_job_id = None
@@ -826,15 +984,21 @@ class ErmesQGISDialog(QDockWidget):
         if new_start_time is None or new_end_time is None:
             self.update_validation_status("Invalid date format.", "error")
         elif new_start_time and new_end_time and new_start_time > new_end_time:
-            self.update_validation_status("Start date must be before end date.", "warning")
+            self.update_validation_status(
+                "Start date must be before end date.", "warning"
+            )
         elif new_start_time and datetime.fromisoformat(
             new_start_time
         ) > datetime.now().replace(tzinfo=None):
-            self.update_validation_status("Start date must be before the current date.", "warning")
+            self.update_validation_status(
+                "Start date must be before the current date.", "warning"
+            )
         elif new_end_time and datetime.fromisoformat(
             new_end_time
         ) > datetime.now().replace(tzinfo=None):
-            self.update_validation_status("End date must be before the current date.", "warning")
+            self.update_validation_status(
+                "End date must be before the current date.", "warning"
+            )
         else:
             self.startDateLineEdit.setText(new_start_time)
             self.endDateLineEdit.setText(new_end_time)
@@ -852,9 +1016,9 @@ class ErmesQGISDialog(QDockWidget):
     def get_aoi_geometry(self):
         """
         Get the Area of Interest (AOI) geometry based on the selected method.
-        
+
         Returns the geometry in EPSG:4326 projection.
-        
+
         :return: Tuple (QgsGeometry, error_message) - Returns (None, error_msg) on error
         """
         if self.drawRectangleRadioButton.isChecked():
@@ -863,64 +1027,64 @@ class ErmesQGISDialog(QDockWidget):
             return self._get_geometry_from_polygon_layer()
         else:  # useMapExtentRadioButton is checked
             return self._get_geometry_from_map_extent()
-    
+
     def _get_geometry_from_drawn_rectangle(self):
         """Get geometry from drawn rectangle."""
         if not self.current_bbox:
             return None, "Please draw a rectangle first."
-        
+
         # Create geometry from bbox coordinates (already in EPSG:4326 from bbox_widget)
         minx, miny, maxx, maxy = self.current_bbox
         geometry = create_geometry_from_rectangle(minx, miny, maxx, maxy)
-        
+
         return geometry, None
-    
+
     def _get_geometry_from_polygon_layer(self):
         """Get geometry from selected polygon layer."""
         selected_layer = self.polygonLayerComboBox.currentLayer()
-        
+
         if not isinstance(selected_layer, QgsVectorLayer):
             return None, "Please select a valid polygon layer."
-        
+
         # Unify all geometries from the layer
         unified_geom, error = unify_layer_geometries(selected_layer)
         if error:
             return None, error
-        
+
         # Transform geometry to EPSG:4326 if needed
         layer_crs = selected_layer.crs()
         transformed_geom, was_transformed, error = transform_geometry_to_epsg4326(
             unified_geom, layer_crs
         )
-        
+
         if error:
             return None, f"Error transforming geometry: {error}"
-        
+
         if was_transformed:
             self.update_status(
                 f"Transformed geometry from {layer_crs.authid()} to EPSG:4326",
                 "info",
             )
-        
+
         return transformed_geom, None
-    
+
     def _get_geometry_from_map_extent(self):
         """Get geometry from current map extent."""
         canvas = iface.mapCanvas()
         extent = canvas.extent()
         canvas_crs = canvas.mapSettings().destinationCrs()
-        
+
         # Create geometry from extent
         geometry = QgsGeometry.fromRect(extent)
-        
+
         # Transform to EPSG:4326 if needed
         transformed_geom, was_transformed, error = transform_geometry_to_epsg4326(
             geometry, canvas_crs
         )
-        
+
         if error:
             return None, f"Error transforming map extent: {error}"
-        
+
         if was_transformed:
             self.update_status(
                 f"Using current map extent (transformed from {canvas_crs.authid()} to EPSG:4326)",
@@ -928,7 +1092,7 @@ class ErmesQGISDialog(QDockWidget):
             )
         else:
             self.update_status("Using current map extent as area of interest", "info")
-        
+
         return transformed_geom, None
 
     # AOI method handling (request tab)
@@ -954,8 +1118,6 @@ class ErmesQGISDialog(QDockWidget):
         """Show the drawing controls"""
         # Create a simple widget with draw/clear buttons
         if self.bboxWidget is None:
-
-
             self.bboxWidget = QWidget()
             layout = QVBoxLayout(self.bboxWidget)
 
@@ -995,7 +1157,6 @@ class ErmesQGISDialog(QDockWidget):
 
         # Deactivate drawing tool if active
         if self.rectangleMapTool:
-
             iface.mapCanvas().unsetMapTool(self.rectangleMapTool)
             self.rectangleMapTool = None
 
@@ -1042,14 +1203,14 @@ class ErmesQGISDialog(QDockWidget):
 
         # Re-validate the form
         self.validate_form_request()
-    
+
     # Send request (request tab)
     def send_request(self):
         """
         Sends a request to the API with the selected parameters.
 
         This function collects and validates the user inputs, constructs a message containing
-        the selected geometry, the chosen pipeline, and the time range. It then sends this 
+        the selected geometry, the chosen pipeline, and the time range. It then sends this
         message to the API.
 
         If multiple layer types are selected, it creates multiple jobs and monitors them all.
@@ -1068,7 +1229,7 @@ class ErmesQGISDialog(QDockWidget):
         if self.has_active_jobs():
             self.update_validation_status(
                 "Cannot start new jobs while other jobs are already running and being monitored.",
-                "warning"
+                "warning",
             )
             return
 
@@ -1082,9 +1243,11 @@ class ErmesQGISDialog(QDockWidget):
         # Get selected layers from list widget
         selected_items = self.layerTypeListWidget.selectedItems()
         if not selected_items:
-            self.update_validation_status("Please select at least one layer type.", "error")
+            self.update_validation_status(
+                "Please select at least one layer type.", "error"
+            )
             return
-        
+
         start_dt = self.startDateLineEdit.text()
         end_dt = self.endDateLineEdit.text()
 
@@ -1110,13 +1273,15 @@ class ErmesQGISDialog(QDockWidget):
             headers = {"Authorization": f"Bearer {self.access_token}"}
 
             job_ids = []
-            
+
             # Create a job for each selected layer type
             for item in selected_items:
                 pipeline_text = item.data(Qt.UserRole)
-                
+
                 # Create job request
-                job_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_create']}"
+                job_url = (
+                    f"{self.api_base_url}{self.config.api_endpoints['jobs_create']}"
+                )
                 job_data = {
                     "datatype_id": self.pipeline_map[pipeline_text],
                     "geometry": geometry,
@@ -1125,12 +1290,16 @@ class ErmesQGISDialog(QDockWidget):
                 }
 
                 try:
-                    job_response = requests.post(job_url, json=job_data, headers=headers)
+                    job_response = requests.post(
+                        job_url, json=job_data, headers=headers
+                    )
                     job_response.raise_for_status()
                     job_result = job_response.json()
                     job_id = job_result["id"]
                     job_ids.append(job_id)
-                    self.update_status(f"Job created with ID: {job_id} for {pipeline_text}", "info")
+                    self.update_status(
+                        f"Job created with ID: {job_id} for {pipeline_text}", "info"
+                    )
                 except requests.exceptions.HTTPError as http_err:
                     # Only handle 400 with extra details
                     if job_response is not None and job_response.status_code == 400:
@@ -1142,9 +1311,7 @@ class ErmesQGISDialog(QDockWidget):
                             f"Bad request: {details.get('detail', details)}", "error"
                         )
                     else:
-                        self.update_status(
-                            f"HTTP error occurred: {http_err}", "error"
-                        )
+                        self.update_status(f"HTTP error occurred: {http_err}", "error")
                     return
                 except Exception as e:
                     self.update_status(f"Error sending request: {e}", "error")
@@ -1153,7 +1320,7 @@ class ErmesQGISDialog(QDockWidget):
             # Start monitoring all jobs
             for job_id in job_ids:
                 self.start_listening(job_id)
-            
+
             self.update_status(f"Started monitoring {len(job_ids)} job(s)", "info")
 
         except Exception as e:
@@ -1166,17 +1333,17 @@ class ErmesQGISDialog(QDockWidget):
         if self.has_active_jobs():
             self.requestPushButton.setEnabled(False)
             return
-        
+
         # Check if all required fields are filled
         start_date = self.startDateLineEdit.text().strip()
         end_date = self.endDateLineEdit.text().strip()
-        
+
         # Check layer type selection
         selected_layer_type = self.layerTypeListWidget.selectedItems()
         if not selected_layer_type:
             self.requestPushButton.setEnabled(False)
             return
-        
+
         # Check AOI method
         if self.drawRectangleRadioButton.isChecked():
             # For drawn rectangle, check if bbox exists
@@ -1239,12 +1406,12 @@ class ErmesQGISDialog(QDockWidget):
         if not self.access_token:
             self.update_status("Error: Please login before making a request.", "error")
             return
-        
+
         # Check if any jobs are currently running
         if self.has_active_jobs():
             self.update_validation_status(
                 "Cannot start new jobs while other jobs are already running and being monitored.",
-                "warning"
+                "warning",
             )
             return
 
@@ -1256,7 +1423,9 @@ class ErmesQGISDialog(QDockWidget):
 
         # Input validation
         if not isinstance(selected_layer, QgsRasterLayer):
-            self.update_validation_status("Please select a valid raster layer.", "error")
+            self.update_validation_status(
+                "Please select a valid raster layer.", "error"
+            )
             return
 
         # Get the file path of the raster layer
@@ -1285,11 +1454,13 @@ class ErmesQGISDialog(QDockWidget):
 
             # Validate file exists
             if not os.path.exists(file_path):
-                self.update_validation_status(f"File {filename} does not exist", "error")
+                self.update_validation_status(
+                    f"File {filename} does not exist", "error"
+                )
                 return
-            
+
             # Generate a temporary job ID for file uploads (will be replaced with actual job ID later)
-            
+
             temp_job_id = f"upload_{uuid.uuid4().hex[:8]}"
 
             # Create the upload task
@@ -1309,14 +1480,20 @@ class ErmesQGISDialog(QDockWidget):
             task_manager.addTask(upload_task)
 
             # Connect signals for safe communication - use lambda to bind temp_job_id
-            upload_task.status_update.connect(lambda msg, lvl="info": self.update_status_for_job(temp_job_id, msg, lvl))
+            upload_task.status_update.connect(
+                lambda msg, lvl="info": self.update_status_for_job(
+                    temp_job_id, msg, lvl
+                )
+            )
             upload_task.upload_completed.connect(self.on_file_upload_completed)
             upload_task.upload_failed.connect(self.on_file_upload_failed)
 
             # Disable button during upload and show loading indicator
             self.requestFilePushButton.setEnabled(False)
             self.fromLayerLoadingLabel.setVisible(True)
-            self.update_status_for_job(temp_job_id, f"Job created and started for: {filename}", "info")
+            self.update_status_for_job(
+                temp_job_id, f"Job created and started for: {filename}", "info"
+            )
 
             # Check task status after a short delay
 
@@ -1356,10 +1533,10 @@ class ErmesQGISDialog(QDockWidget):
                 "success",
             )
             self.load_layer(temp_file_path, datatype_id)
-            
+
             # Clear current job ID after completion
             self.current_job_id = None
-            
+
             self.requestFilePushButton.setEnabled(True)
             self.fromLayerLoadingLabel.setVisible(False)
         except Exception as e:
@@ -1404,8 +1581,12 @@ class ErmesQGISDialog(QDockWidget):
 
         worker.layer_ready.connect(self.load_layer)
         # Connect status updates with job_id using lambda to capture it
-        worker.status_updated.connect(lambda msg: self.update_status_for_job(job_id, msg, "info"))
-        worker.error.connect(lambda msg: self.update_status_for_job(job_id, msg, "error"))
+        worker.status_updated.connect(
+            lambda msg: self.update_status_for_job(job_id, msg, "info")
+        )
+        worker.error.connect(
+            lambda msg: self.update_status_for_job(job_id, msg, "error")
+        )
 
         # Add to lists
         self.threads.append(thread)
@@ -1417,9 +1598,11 @@ class ErmesQGISDialog(QDockWidget):
         # Disable button and show loading indicator
         self.requestPushButton.setEnabled(False)
         self.requestLoadingLabel.setVisible(True)
-        
+
         # Create the BaseMessageBox for this job
-        self.update_status_for_job(job_id, f"Started monitoring job {job_id}...", "info")
+        self.update_status_for_job(
+            job_id, f"Started monitoring job {job_id}...", "info"
+        )
 
     def load_layer(self, file_path, datatype_id=None):
         """Loads the downloaded file into QGIS. This runs on the main thread."""
@@ -1594,14 +1777,14 @@ class ErmesQGISDialog(QDockWidget):
             f"Successfully loaded {loaded_count} layer(s) into group '{group_name}'",
             "success",
         )
-    
+
     def validate_form_from_layer(self):
         """Validates the form and enables/disables the request button accordingly"""
         # FIRST CHECK: If any jobs are currently being monitored, keep button disabled
         if self.has_active_jobs():
             self.requestFilePushButton.setEnabled(False)
             return
-        
+
         selected_layer = self.rasterLayerComboBox.currentLayer()
         image_type = self.imageTypeComboBox.currentText()
         requested_layer = self.requestedLayerComboBox.currentText()
@@ -1655,12 +1838,12 @@ class ErmesQGISDialog(QDockWidget):
     # ------------------------------------------------------------------------------------------------
     # Status updates (request and from layer tabs)
     # ------------------------------------------------------------------------------------------------
-    
+
     def update_status_for_job(self, job_id, message, level="info"):
         """
         Updates the status for a specific job ID.
         This creates/updates a BaseMessageBox for the given job.
-        
+
         :param job_id: The job ID to update
         :param message: The status message
         :param level: The message level (info, warning, error, success)
@@ -1677,23 +1860,23 @@ class ErmesQGISDialog(QDockWidget):
 
         # Add to job log widgets using the job_id as box_type
         try:
-            if hasattr(self, 'job_log_widget_1'):
+            if hasattr(self, "job_log_widget_1"):
                 self.job_log_widget_1.add_message(str(job_id), message, level)
-            if hasattr(self, 'job_log_widget_2'):
+            if hasattr(self, "job_log_widget_2"):
                 self.job_log_widget_2.add_message(str(job_id), message, level)
-            
+
             # Update job status indicator
             color_map = {
                 "info": "#2196F3",
                 "success": "#4CAF50",
                 "warning": "#FF9800",
-                "error": "#F44336"
+                "error": "#F44336",
             }
             color = color_map.get(level, "#666666")
-            
-            if hasattr(self, 'job_log_widget_1'):
+
+            if hasattr(self, "job_log_widget_1"):
                 self.job_log_widget_1.update_status(str(job_id), level.upper(), color)
-            if hasattr(self, 'job_log_widget_2'):
+            if hasattr(self, "job_log_widget_2"):
                 self.job_log_widget_2.update_status(str(job_id), level.upper(), color)
         except Exception as e:
             print(f"Error updating job log widget: {e}")
@@ -1714,11 +1897,15 @@ class ErmesQGISDialog(QDockWidget):
         if self.current_job_id is not None:
             try:
                 # Add to both job log widgets using the job_id as box_type
-                if hasattr(self, 'job_log_widget_1'):
-                    self.job_log_widget_1.add_message(self.current_job_id, message, level)
-                if hasattr(self, 'job_log_widget_2'):
-                    self.job_log_widget_2.add_message(self.current_job_id, message, level)
-                
+                if hasattr(self, "job_log_widget_1"):
+                    self.job_log_widget_1.add_message(
+                        self.current_job_id, message, level
+                    )
+                if hasattr(self, "job_log_widget_2"):
+                    self.job_log_widget_2.add_message(
+                        self.current_job_id, message, level
+                    )
+
                 # Update job status indicator
                 self.update_job_status_indicator(level)
             except Exception as e:
@@ -1728,9 +1915,9 @@ class ErmesQGISDialog(QDockWidget):
             if level in ["warning", "error"]:
                 try:
                     # Use "warning" or "error" as box_type
-                    if hasattr(self, 'job_log_widget_1'):
+                    if hasattr(self, "job_log_widget_1"):
                         self.job_log_widget_1.add_message(level, message, level)
-                    if hasattr(self, 'job_log_widget_2'):
+                    if hasattr(self, "job_log_widget_2"):
                         self.job_log_widget_2.add_message(level, message, level)
                 except Exception as e:
                     pass
@@ -1738,7 +1925,7 @@ class ErmesQGISDialog(QDockWidget):
         # Keep backward compatibility with old textLogger (not used with new JobLogWidget)
         # Left here for reference if needed
         pass
-    
+
     def update_job_status_indicator(self, level="info"):
         """Update the status indicator for the current job"""
         if self.current_job_id is not None:
@@ -1746,18 +1933,22 @@ class ErmesQGISDialog(QDockWidget):
                 "info": "#2196F3",
                 "success": "#4CAF50",
                 "warning": "#FF9800",
-                "error": "#F44336"
+                "error": "#F44336",
             }
             color = color_map.get(level, "#666666")
-            
+
             try:
-                if hasattr(self, 'job_log_widget_1'):
-                    self.job_log_widget_1.update_status(self.current_job_id, level.upper(), color)
-                if hasattr(self, 'job_log_widget_2'):
-                    self.job_log_widget_2.update_status(self.current_job_id, level.upper(), color)
+                if hasattr(self, "job_log_widget_1"):
+                    self.job_log_widget_1.update_status(
+                        self.current_job_id, level.upper(), color
+                    )
+                if hasattr(self, "job_log_widget_2"):
+                    self.job_log_widget_2.update_status(
+                        self.current_job_id, level.upper(), color
+                    )
             except Exception as e:
                 pass
-    
+
     def update_validation_status(self, message, level="warning"):
         """Update status for validation messages (always goes to general warning/error boxes)"""
         # Add timestamp and format the message
@@ -1773,9 +1964,9 @@ class ErmesQGISDialog(QDockWidget):
         # Always add validation messages to general warning/error boxes (ignore current_job_id)
         if level in ["warning", "error"]:
             try:
-                if hasattr(self, 'job_log_widget_1'):
+                if hasattr(self, "job_log_widget_1"):
                     self.job_log_widget_1.add_message(level, message, level)
-                if hasattr(self, 'job_log_widget_2'):
+                if hasattr(self, "job_log_widget_2"):
                     self.job_log_widget_2.add_message(level, message, level)
             except Exception as e:
                 pass
@@ -1792,9 +1983,9 @@ class ErmesQGISDialog(QDockWidget):
 
             # Stop all job monitoring threads
             for worker in self.workers:
-                if hasattr(worker, 'stop'):
+                if hasattr(worker, "stop"):
                     worker.stop()
-            
+
             for thread in self.threads:
                 if thread.isRunning():
                     thread.quit()
@@ -1814,7 +2005,7 @@ class ErmesQGISDialog(QDockWidget):
         """
         Cleans up thread and worker references after the thread has finished.
         This slot is connected to the thread's finished signal.
-        
+
         :param thread: The QThread that finished
         :param worker: The worker object associated with the thread
         :param job_id: The job ID that finished
@@ -1824,15 +2015,15 @@ class ErmesQGISDialog(QDockWidget):
             self.threads.remove(thread)
         if worker in self.workers:
             self.workers.remove(worker)
-        
+
         # Update the job's status to completed
         self.update_status_for_job(job_id, f"Job {job_id} completed", "success")
-        
+
         # If all jobs are finished, hide loading indicator
         if not self.has_active_jobs():
             self.requestLoadingLabel.setVisible(False)
             self.update_status("All jobs completed", "success")
-        
+
         # Re-validate the form to enable/disable the button appropriately
         self.validate_form_request()
 
@@ -1875,7 +2066,7 @@ class ErmesQGISDialog(QDockWidget):
     def setup_job_log_widgets(self):
         """Replace textLogger widgets with JobLogWidget"""
         # Replace textLogger in Request tab with JobLogWidget
-        if hasattr(self, 'textLogger'):
+        if hasattr(self, "textLogger"):
             # Get the parent widget and its grid layout
             text_logger_parent = self.textLogger.parent()
             if text_logger_parent:
@@ -1885,18 +2076,20 @@ class ErmesQGISDialog(QDockWidget):
                     index = layout.indexOf(self.textLogger)
                     if index >= 0:
                         row, col, rowspan, colspan = layout.getItemPosition(index)
-                        
+
                         # Remove textLogger
                         layout.removeWidget(self.textLogger)
                         self.textLogger.setParent(None)
                         self.textLogger.deleteLater()
-                        
+
                         # Create new JobLogWidget and add it at the same position
                         self.job_log_widget_1 = JobLogWidget()
-                        layout.addWidget(self.job_log_widget_1, row, col, rowspan, colspan)
-        
+                        layout.addWidget(
+                            self.job_log_widget_1, row, col, rowspan, colspan
+                        )
+
         # Replace textLogger2 in From Layer tab with JobLogWidget
-        if hasattr(self, 'textLogger2'):
+        if hasattr(self, "textLogger2"):
             # Get the parent widget and its grid layout
             text_logger_parent = self.textLogger2.parent()
             if text_logger_parent:
@@ -1906,20 +2099,22 @@ class ErmesQGISDialog(QDockWidget):
                     index = layout.indexOf(self.textLogger2)
                     if index >= 0:
                         row, col, rowspan, colspan = layout.getItemPosition(index)
-                        
+
                         # Remove textLogger2
                         layout.removeWidget(self.textLogger2)
                         self.textLogger2.setParent(None)
                         self.textLogger2.deleteLater()
-                        
+
                         # Create new JobLogWidget and add it at the same position
                         self.job_log_widget_2 = JobLogWidget()
-                        layout.addWidget(self.job_log_widget_2, row, col, rowspan, colspan)
+                        layout.addWidget(
+                            self.job_log_widget_2, row, col, rowspan, colspan
+                        )
 
     def setup_loading_indicators(self):
         """Setup loading indicators for the Get Layer buttons"""
         from PyQt5.QtWidgets import QHBoxLayout, QWidget
-        
+
         # Create loading indicator for Request tab
         self.requestLoadingLabel = QLabel("⏳ Processing...")
         self.requestLoadingLabel.setStyleSheet("""
@@ -1933,7 +2128,7 @@ class ErmesQGISDialog(QDockWidget):
             }
         """)
         self.requestLoadingLabel.setVisible(False)
-        
+
         # Get the grid layout from the Request tab
         request_grid = self.requestPushButton.parent().layout()
         if isinstance(request_grid, QtWidgets.QGridLayout):
@@ -1941,19 +2136,19 @@ class ErmesQGISDialog(QDockWidget):
             button_index = request_grid.indexOf(self.requestPushButton)
             if button_index >= 0:
                 row, col, rowspan, colspan = request_grid.getItemPosition(button_index)
-                
+
                 # Remove the button from the grid
                 request_grid.removeWidget(self.requestPushButton)
-                
+
                 # Create a horizontal layout with the button and loading indicator
                 request_h_layout = QHBoxLayout()
                 request_h_layout.addWidget(self.requestPushButton)
                 request_h_layout.addWidget(self.requestLoadingLabel)
                 request_h_layout.addStretch()
-                
+
                 # Add the horizontal layout back to the grid at the same position
                 request_grid.addLayout(request_h_layout, row, col)
-        
+
         # Create loading indicator for From Layer tab
         self.fromLayerLoadingLabel = QLabel("⏳ Processing...")
         self.fromLayerLoadingLabel.setStyleSheet("""
@@ -1967,24 +2162,26 @@ class ErmesQGISDialog(QDockWidget):
             }
         """)
         self.fromLayerLoadingLabel.setVisible(False)
-        
+
         # Get the grid layout from the From Layer tab
         from_layer_grid = self.requestFilePushButton.parent().layout()
         if isinstance(from_layer_grid, QtWidgets.QGridLayout):
             # Find the button's position
             button_index = from_layer_grid.indexOf(self.requestFilePushButton)
             if button_index >= 0:
-                row, col, rowspan, colspan = from_layer_grid.getItemPosition(button_index)
-                
+                row, col, rowspan, colspan = from_layer_grid.getItemPosition(
+                    button_index
+                )
+
                 # Remove the button from the grid
                 from_layer_grid.removeWidget(self.requestFilePushButton)
-                
+
                 # Create a horizontal layout with the button and loading indicator
                 from_layer_h_layout = QHBoxLayout()
                 from_layer_h_layout.addWidget(self.requestFilePushButton)
                 from_layer_h_layout.addWidget(self.fromLayerLoadingLabel)
                 from_layer_h_layout.addStretch()
-                
+
                 # Add the horizontal layout back to the grid at the same position
                 from_layer_grid.addLayout(from_layer_h_layout, row, col)
 

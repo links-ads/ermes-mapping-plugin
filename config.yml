@@ -9,6 +9,8 @@ api:
   # API Endpoints
   endpoints:
     login: "/auth/login"
+    request_password_reset: "/auth/request-password-reset"
+    reset_password: "/auth/reset-password"
     jobs_create: "/jobs/create"
     jobs_create_from_file: "/jobs/create/from_file"
     jobs_list: "/jobs/"
