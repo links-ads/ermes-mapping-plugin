@@ -64,6 +64,17 @@ from qgis.core import QgsMapLayerProxyModel
 # Store job data in the row for later use
 from PyQt5.QtCore import Qt
 
+
+class _PipelineItem:
+    """Minimal item-like object for compatibility with code that expects item.data(Qt.UserRole)."""
+
+    def __init__(self, display_name):
+        self._display_name = display_name
+
+    def data(self, role):
+        return self._display_name if role == Qt.UserRole else None
+
+
 # Import the workers from their new modules
 from .workers.job import JobsWorker
 from .workers.main import MainWorker
@@ -146,7 +157,9 @@ class ErmesQGISDialog(QDockWidget):
         # Worker utils - changed to lists to support multiple concurrent jobs
         self.threads = []  # List of threads monitoring jobs
         self.workers = []  # List of workers monitoring jobs
-        self._upload_tasks_in_flight = 0  # File upload tasks started but not yet completed/failed
+        self._upload_tasks_in_flight = (
+            0  # File upload tasks started but not yet completed/failed
+        )
 
         # Jobs tab worker utils
         self.jobs_thread = None
@@ -158,6 +171,30 @@ class ErmesQGISDialog(QDockWidget):
         self.tabWidget.setTabEnabled(2, False)  # From Layer
         self.tabWidget.setTabEnabled(3, False)  # Jobs
         self.tabWidget.setCurrentIndex(0)  # Switch to Login tab
+
+        # Pipeline categories for same-category multi-select (fire with fire, flood with flood, etc.)
+        self.SATELLITE_IMAGE_DATATYPE_IDS = {
+            "flood_satellite_image_sentinel_1",
+            "fire_satellite_image_sentinel_2",
+        }
+        self.FIRE_DATATYPE_IDS = {
+            "fire_burned_area_delineation",
+            "fire_burned_area_severity_estimation",
+            "fire_active_flames_and_smoke_detection",
+        }
+        self.FLOOD_DATATYPE_IDS = {
+            "flood_post_waterbody_delineation",
+            "flood_post_waterdepth_estimation",
+        }
+        self.LANDCOVER_DATATYPE_IDS = {"land_cover_sentinel_2"}
+        self._last_valid_pipeline_selection = []  # list of display names (pipeline_info keys)
+        # Widgets that form the "AOI + date range" block (shown only when at least one pipeline is selected)
+        self._aoi_date_block_widgets = []
+        # Pipeline checkboxes by category (display_name -> QCheckBox); set in setup_layer_type_list
+        self._pipeline_checkboxes = {}
+        self._pipeline_checkbox_container = (
+            None  # QWidget that replaces the list in the layout
+        )
 
         # Load configuration
         self.config = ConfigLoader()
@@ -458,14 +495,21 @@ class ErmesQGISDialog(QDockWidget):
         dialog.setLayout(layout)
 
         username_edit = QLineEdit()
-        username_edit.setPlaceholderText("Username or email")
+        username_edit.setPlaceholderText("Username")
         username_edit.setMinimumWidth(280)
-        layout.addRow("Username or email:", username_edit)
+        layout.addRow("Username:", username_edit)
+
+        email_edit = QLineEdit()
+        email_edit.setPlaceholderText("your@email.com")
+        email_edit.setMinimumWidth(280)
+        layout.addRow("Email:", email_edit)
 
         request_btn = QPushButton("Request reset token")
         layout.addRow("", request_btn)
 
-        status_label = QLabel("Enter your username or email and click Request reset token.")
+        status_label = QLabel(
+            "Enter your username and email (must match the account). Click Request reset token."
+        )
         status_label.setWordWrap(True)
         status_label.setStyleSheet("color: #555;")
         layout.addRow(status_label)
@@ -498,8 +542,9 @@ class ErmesQGISDialog(QDockWidget):
 
         def on_request_reset():
             username = username_edit.text().strip()
-            if not username:
-                status_label.setText("Please enter your username or email.")
+            email = email_edit.text().strip()
+            if not username or not email:
+                status_label.setText("Please enter both username and email.")
                 status_label.setStyleSheet("color: #c62828;")
                 return
             request_btn.setEnabled(False)
@@ -507,7 +552,9 @@ class ErmesQGISDialog(QDockWidget):
             status_label.setStyleSheet("color: #555;")
             try:
                 url = f"{self.api_base_url}{self.config.api_endpoints['request_password_reset']}"
-                resp = requests.post(url, json={"username": username})
+                resp = requests.post(
+                    url, json={"username": username, "email": email}
+                )
                 resp.raise_for_status()
                 data = resp.json()
                 token = data.get("reset_token") if isinstance(data, dict) else None
@@ -526,8 +573,8 @@ class ErmesQGISDialog(QDockWidget):
                     status_label.setStyleSheet("color: #2e7d32;")
                 else:
                     status_label.setText(
-                        "If an account exists for this username or email, a reset token has been generated. "
-                        "Check your username and try again, or use the token if you received it elsewhere."
+                        "If an account exists with this username and email, a reset token has been generated. "
+                        "Check that both match your account and try again."
                     )
                     status_label.setStyleSheet("color: #555;")
             except requests.HTTPError as e:
@@ -564,7 +611,9 @@ class ErmesQGISDialog(QDockWidget):
             status_label.setText("Resetting password...")
             status_label.setStyleSheet("color: #555;")
             try:
-                url = f"{self.api_base_url}{self.config.api_endpoints['reset_password']}"
+                url = (
+                    f"{self.api_base_url}{self.config.api_endpoints['reset_password']}"
+                )
                 resp = requests.post(
                     url,
                     json={"reset_token": token, "new_password": new_pass},
@@ -619,10 +668,16 @@ class ErmesQGISDialog(QDockWidget):
         self.clear_saved_credentials()
 
         # Stop jobs monitoring
-        if self.jobs_thread and self.jobs_thread.isRunning():
-            self.jobs_worker.stop()
-            self.jobs_thread.quit()
-            self.jobs_thread.wait()
+        try:
+            if self.jobs_thread is not None and self.jobs_thread.isRunning():
+                self.jobs_worker.stop()
+                self.jobs_thread.quit()
+                self.jobs_thread.wait()
+        except RuntimeError:
+            # QThread was already deleted
+            pass
+        finally:
+            self.jobs_thread = None
         # Disable all tabs except login
         self.tabWidget.setTabEnabled(1, False)
         self.tabWidget.setTabEnabled(2, False)
@@ -771,8 +826,7 @@ class ErmesQGISDialog(QDockWidget):
                 row,
                 4,
                 QTableWidgetItem(
-                    self._format_job_datetime(job.get("created_at", ""))
-                    or ""
+                    self._format_job_datetime(job.get("created_at", "")) or ""
                 ),
             )
             self.jobsTableWidget.setItem(
@@ -792,15 +846,15 @@ class ErmesQGISDialog(QDockWidget):
 
     def download_selected_jobs(self):
         """Download and load the selected job from the Jobs Table into QGIS"""
-        # Get the currently selected row
+        # Get the selected row: use selection if any, otherwise the current row (focus)
         selected_items = self.jobsTableWidget.selectedItems()
-
-        if not selected_items:
+        if selected_items:
+            row = selected_items[0].row()
+        else:
+            row = self.jobsTableWidget.currentRow()
+        if row < 0:
             self.update_status("No job selected for download.", "warning")
             return
-
-        # Get the first selected item (only one row can be selected)
-        row = selected_items[0].row()
 
         try:
             # Get job data from the table
@@ -810,6 +864,9 @@ class ErmesQGISDialog(QDockWidget):
                 return
 
             job_data = job_item.data(Qt.UserRole)
+            if not job_data or not isinstance(job_data, dict):
+                self.update_status("Error: Could not retrieve job data.", "error")
+                return
             job_id = job_data.get("id")
             job_status = job_data.get("status")
             resource_url = job_data.get("resource_url")
@@ -903,55 +960,229 @@ class ErmesQGISDialog(QDockWidget):
             self.update_status(f"Internal error refreshing jobs table", "error")
 
     # ------------------------------------------------------------------------------------------------
-    # Layer type list (request tab)
+    # Layer type list (request tab) – checkboxes grouped by category
     # ------------------------------------------------------------------------------------------------
-    def setup_layer_type_list(self):
-        """Setup the layer type list widget with images and descriptions"""
-        if hasattr(self, "layerTypeListWidget"):
-            self.layerTypeListWidget.clear()
+    def _show_pipeline_info(self, layer_name):
+        """Show a dialog with pipeline image and description."""
+        from PyQt5.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QLabel,
+            QDialogButtonBox,
+        )
+        from PyQt5.QtGui import QPixmap
 
-            # Enable multi-selection
-            from PyQt5.QtWidgets import QAbstractItemView
+        layer_data = self.pipeline_info.get(layer_name, {})
+        desc = layer_data.get("description", "")
+        image_name = layer_data.get("image", "")
 
-            self.layerTypeListWidget.setSelectionMode(QAbstractItemView.MultiSelection)
+        dlg = QDialog(self.content_widget)
+        dlg.setWindowTitle(layer_name)
+        layout = QVBoxLayout(dlg)
 
-            # Get the base path for images (plugin root directory)
-            base_path = os.path.dirname(__file__)
-
-            for layer_name, layer_data in self.pipeline_info.items():
-                # Create list widget item
-                item = QListWidgetItem()
-
-                # Set the icon (look in plugin root directory)
-                icon_path = os.path.join(
-                    base_path, self.config.images_directory, layer_data["image"]
+        # Image
+        base_path = os.path.dirname(__file__)
+        icon_path = os.path.join(base_path, self.config.images_directory, image_name)
+        if image_name and os.path.exists(icon_path):
+            pix = QPixmap(icon_path)
+            if not pix.isNull():
+                img_label = QLabel()
+                img_label.setPixmap(
+                    pix.scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 )
-                if os.path.exists(icon_path):
-                    item.setIcon(QIcon(icon_path))
-                else:
-                    # Use default QGIS icon as placeholder
-                    item.setIcon(QIcon(":/images/themes/default/mIconRaster.svg"))
+                img_label.setAlignment(Qt.AlignCenter)
+                layout.addWidget(img_label)
 
-                # Set the text with name and description
-                item.setText(f"{layer_name}\n{layer_data['description']}")
+        # Description
+        desc_label = QLabel(desc)
+        desc_label.setWordWrap(True)
+        desc_label.setMinimumWidth(280)
+        layout.addWidget(desc_label)
 
-                # Store the layer name as user data for easy retrieval
-                item.setData(Qt.UserRole, layer_name)
+        # Close button
+        btn = QDialogButtonBox(QDialogButtonBox.Ok)
+        btn.accepted.connect(dlg.accept)
+        layout.addWidget(btn)
+        dlg.exec_()
 
-                # Set tooltip
-                item.setToolTip(f"{layer_name}: {layer_data['description']}")
+    def setup_layer_type_list(self):
+        """Setup pipeline selection as checkboxes grouped by category (Fire, Flood, Landcover)."""
+        from PyQt5.QtWidgets import (
+            QScrollArea,
+            QCheckBox,
+            QVBoxLayout,
+            QHBoxLayout,
+            QPushButton,
+            QWidget,
+        )
 
-                # Add item to list
-                self.layerTypeListWidget.addItem(item)
+        # Group pipelines by category
+        category_label = {
+            "satellite": "Satellite image",
+            "fire": "Fire",
+            "flood": "Flood",
+            "landcover": "Landcover",
+        }
+        by_category = {"satellite": [], "fire": [], "flood": [], "landcover": []}
+        for layer_name, layer_data in self.pipeline_info.items():
+            did = self.pipeline_map.get(layer_name)
+            cat = self._get_category_for_datatype(did) if did else None
+            if cat and cat in by_category:
+                by_category[cat].append((layer_name, layer_data))
 
-            # Select the first item (Sentinel-1 image) by default
-            if self.layerTypeListWidget.count() > 0:
-                self.layerTypeListWidget.setCurrentRow(0)
+        # Build checkbox container
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QtWidgets.QWidget()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(2, 2, 2, 2)
+        self._pipeline_checkboxes.clear()
 
-            # Connect selection change signal
-            self.layerTypeListWidget.itemSelectionChanged.connect(
-                self.validate_form_request
+        for cat_key in ("satellite", "fire", "flood", "landcover"):
+            pipelines = by_category.get(cat_key, [])
+            if not pipelines:
+                continue
+            # Category label
+            cat_label = QtWidgets.QLabel(category_label[cat_key])
+            cat_label.setStyleSheet(
+                "font-weight: bold; font-size: 11px; margin-top: 8px;"
             )
+            layout.addWidget(cat_label)
+            # Checkboxes for this category, each with an info button
+            for layer_name, layer_data in pipelines:
+                row = QWidget()
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(0, 2, 0, 2)
+
+                info_btn = QPushButton("ℹ")
+                info_btn.setToolTip("Show pipeline info")
+                info_btn.setFixedSize(18, 18)
+                info_btn.setStyleSheet("font-size: 11px;")
+                info_btn.clicked.connect(
+                    lambda checked=False, n=layer_name: self._show_pipeline_info(n)
+                )
+                row_layout.addWidget(info_btn)
+
+                cb = QCheckBox(layer_name)
+                cb.setToolTip(f"{layer_name}: {layer_data.get('description', '')}")
+                cb.setProperty("_display_name", layer_name)
+                cb.setProperty("_category", cat_key)
+                cb.stateChanged.connect(
+                    lambda state, n=layer_name, c=cat_key: (
+                        self._on_pipeline_checkbox_toggled(n, c, state == Qt.Checked)
+                    )
+                )
+                self._pipeline_checkboxes[layer_name] = cb
+                row_layout.addWidget(cb, 1)
+                layout.addWidget(row)
+            layout.addSpacing(4)
+
+        content.setLayout(layout)
+        scroll.setWidget(content)
+        self._pipeline_checkbox_container = scroll
+
+        # Replace list widget in layout
+        parent = self.layerTypeListWidget.parentWidget()
+        if parent and parent.layout():
+            parent.layout().replaceWidget(self.layerTypeListWidget, scroll)
+        self.layerTypeListWidget.setParent(None)
+        self.layerTypeListWidget.hide()
+
+        # Connect validation to checkbox changes (already done via stateChanged)
+        if not self._aoi_date_block_widgets:
+            for name in (
+                "label_3",
+                "aoiMethodLabel",
+                "useMapExtentRadioButton",
+                "drawRectangleRadioButton",
+                "selectPolygonRadioButton",
+                "polygonLayerComboBox",
+                "label_4",
+                "timeRangeLabel",
+                "startDateLineEdit",
+                "timeLabel",
+                "endDateLineEdit",
+                "calendarSpacer",
+                "calendarWidget",
+            ):
+                w = getattr(self.ui, name, None)
+                if w is not None and hasattr(w, "setVisible"):
+                    self._aoi_date_block_widgets.append(w)
+        self._last_valid_pipeline_selection = [
+            name for name, cb in self._pipeline_checkboxes.items() if cb.isChecked()
+        ]
+        self._update_aoi_date_block_visibility(self._get_selected_pipeline_items())
+        self._on_pipeline_selection_changed()
+
+    def _on_pipeline_checkbox_toggled(self, display_name, category, checked):
+        """When a pipeline checkbox is toggled: update selection state and date/AOI visibility (cross-category selection allowed)."""
+        self._last_valid_pipeline_selection = [
+            name for name, c in self._pipeline_checkboxes.items() if c.isChecked()
+        ]
+        self._update_aoi_date_block_visibility(self._get_selected_pipeline_items())
+        self._on_pipeline_selection_changed()
+        self.validate_form_request()
+
+    def _update_aoi_date_block_visibility(self, selected):
+        """Show the AOI + date range block only when at least one pipeline is selected."""
+        visible = len(selected) > 0
+        for w in self._aoi_date_block_widgets:
+            if hasattr(w, "setVisible"):
+                # bboxWidget (draw rectangle controls) only when "Draw Rectangle" is selected
+                if w is getattr(self, "bboxWidget", None):
+                    w.setVisible(
+                        visible
+                        and getattr(self, "drawRectangleRadioButton", None) is not None
+                        and self.drawRectangleRadioButton.isChecked()
+                    )
+                else:
+                    w.setVisible(visible)
+
+    def _get_category_for_datatype(self, datatype_id):
+        """Return category name for datatype_id: 'satellite', 'fire', 'flood', 'landcover', or None."""
+        if datatype_id in self.SATELLITE_IMAGE_DATATYPE_IDS:
+            return "satellite"
+        if datatype_id in self.FIRE_DATATYPE_IDS:
+            return "fire"
+        if datatype_id in self.FLOOD_DATATYPE_IDS:
+            return "flood"
+        if datatype_id in self.LANDCOVER_DATATYPE_IDS:
+            return "landcover"
+        return None
+
+    def _get_selected_pipeline_items(self):
+        """Return list of item-like objects with .data(Qt.UserRole) = display name for selected pipelines."""
+        if self._pipeline_checkboxes:
+            return [
+                _PipelineItem(name)
+                for name, cb in self._pipeline_checkboxes.items()
+                if cb.isChecked()
+            ]
+        return [
+            _PipelineItem(item.data(Qt.UserRole))
+            for item in self._get_selected_pipeline_items()
+        ]
+
+    def _enforce_same_category_and_update_date_ui(self):
+        """Update AOI+date block visibility and date UI from current selection (used when using list widget)."""
+        selected = self._get_selected_pipeline_items()
+        self._update_aoi_date_block_visibility(selected)
+        self._last_valid_pipeline_selection = [
+            item.data(Qt.UserRole) for item in selected
+        ]
+        self._on_pipeline_selection_changed()
+
+    def _on_pipeline_selection_changed(self):
+        """Update date UI based on selected pipeline(s); all pipelines use start + end date."""
+        selected = self._get_selected_pipeline_items()
+        if not selected:
+            return
+        self.startDateLineEdit.setVisible(True)
+        if hasattr(self, "timeLabel"):
+            self.timeLabel.setVisible(True)
+        self.endDateLineEdit.setPlaceholderText("Select end date")
+        self.validate_form_request()
 
     def start_jobs_monitoring(self):
         """Start monitoring jobs from the API"""
@@ -1022,9 +1253,8 @@ class ErmesQGISDialog(QDockWidget):
         self.active_time = active
 
     def update_dates(self):
-        new_start_time = parse_date(self.startDateLineEdit.text())
         new_end_time = parse_date(self.endDateLineEdit.text())
-
+        new_start_time = parse_date(self.startDateLineEdit.text())
         if new_start_time is None or new_end_time is None:
             self.update_validation_status("Invalid date format.", "error")
         elif new_start_time and new_end_time and new_start_time > new_end_time:
@@ -1050,7 +1280,6 @@ class ErmesQGISDialog(QDockWidget):
     def add_calendar_date(self):
         """Handles selected calendar date"""
         calendar_time = str(self.calendarWidget.selectedDate().toPyDate())
-
         if self.active_time == "start_date":
             self.startDateLineEdit.setText(calendar_time)
         else:
@@ -1190,6 +1419,9 @@ class ErmesQGISDialog(QDockWidget):
 
             # Insert the widget into the layout
             self.aoiMethodLayout.insertWidget(2, self.bboxWidget)
+            # Include in AOI+date block so it hides when no pipeline is selected
+            if self.bboxWidget not in self._aoi_date_block_widgets:
+                self._aoi_date_block_widgets.append(self.bboxWidget)
 
         if self.bboxWidget:
             self.bboxWidget.setVisible(True)
@@ -1276,16 +1508,13 @@ class ErmesQGISDialog(QDockWidget):
             return
 
         # Retrieve user inputs
-        # Get selected layers from list widget
-        selected_items = self.layerTypeListWidget.selectedItems()
+        # Get selected layers from pipeline checkboxes (or list widget fallback)
+        selected_items = self._get_selected_pipeline_items()
         if not selected_items:
             self.update_validation_status(
                 "Please select at least one layer type.", "error"
             )
             return
-
-        start_dt = self.startDateLineEdit.text()
-        end_dt = self.endDateLineEdit.text()
 
         # Get AOI geometry
         unified_qgs_geom, error = self.get_aoi_geometry()
@@ -1308,16 +1537,16 @@ class ErmesQGISDialog(QDockWidget):
             # Use the saved access token for authentication
             headers = {"Authorization": f"Bearer {self.access_token}"}
 
-            job_ids = []  # list of (job_id, pipeline_text)
-            job_pipeline_pairs = []
+            job_ids = []
 
-            job_url = (
-                f"{self.api_base_url}{self.config.api_endpoints['jobs_create']}"
-            )
+            job_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_create']}"
+            start_dt = self.startDateLineEdit.text()
+            end_dt = self.endDateLineEdit.text()
             for item in selected_items:
                 pipeline_text = item.data(Qt.UserRole)
+                datatype_id = self.pipeline_map[pipeline_text]
                 job_data = {
-                    "datatype_id": self.pipeline_map[pipeline_text],
+                    "datatype_id": datatype_id,
                     "geometry": geometry,
                     "start_date": start_dt,
                     "end_date": end_dt,
@@ -1387,7 +1616,7 @@ class ErmesQGISDialog(QDockWidget):
         end_date = self.endDateLineEdit.text().strip()
 
         # Check layer type selection
-        selected_layer_type = self.layerTypeListWidget.selectedItems()
+        selected_layer_type = self._get_selected_pipeline_items()
         if not selected_layer_type:
             self.requestPushButton.setEnabled(False)
             return
@@ -1406,12 +1635,10 @@ class ErmesQGISDialog(QDockWidget):
                 return
         # For map extent, no additional check needed - always available
 
-        # Basic validation: all fields must be present
+        # Both start and end date required for all pipelines
         if not start_date or not end_date:
             self.requestPushButton.setEnabled(False)
             return
-
-        # Validate date format and range
         try:
             start_parsed = parse_date(start_date)
             end_parsed = parse_date(end_date)
@@ -1423,7 +1650,6 @@ class ErmesQGISDialog(QDockWidget):
             if start_parsed and end_parsed and start_parsed > end_parsed:
                 self.requestPushButton.setEnabled(False)
                 return
-
         except Exception:
             self.requestPushButton.setEnabled(False)
             return
@@ -1920,7 +2146,9 @@ class ErmesQGISDialog(QDockWidget):
             self._cached_messages.append(formatted_message)
             self.status_messages.append(formatted_message_with_timestamp)
 
-        pipeline_for_widget = pipeline if pipeline is not None else self._job_pipeline.get(job_id)
+        pipeline_for_widget = (
+            pipeline if pipeline is not None else self._job_pipeline.get(job_id)
+        )
 
         # Shorten preview only: strip redundant "Job {id} status:" / "Job {id} " prefix
         display_message = message
@@ -1935,11 +2163,19 @@ class ErmesQGISDialog(QDockWidget):
         try:
             if hasattr(self, "job_log_widget_1"):
                 self.job_log_widget_1.add_message(
-                    str(job_id), message, level, pipeline=pipeline_for_widget, display_message=display_message
+                    str(job_id),
+                    message,
+                    level,
+                    pipeline=pipeline_for_widget,
+                    display_message=display_message,
                 )
             if hasattr(self, "job_log_widget_2"):
                 self.job_log_widget_2.add_message(
-                    str(job_id), message, level, pipeline=pipeline_for_widget, display_message=display_message
+                    str(job_id),
+                    message,
+                    level,
+                    pipeline=pipeline_for_widget,
+                    display_message=display_message,
                 )
 
             # Update job status indicator
@@ -2064,16 +2300,23 @@ class ErmesQGISDialog(QDockWidget):
                     worker.stop()
 
             for thread in self.threads:
-                if thread.isRunning():
-                    thread.quit()
-                    thread.wait()  # Wait for the thread to finish
-
-            # Stop jobs monitoring
-            if self.jobs_thread and self.jobs_thread.isRunning():
-                self.jobs_worker.stop()
-                self.jobs_thread.quit()
-                self.jobs_thread.wait()
-        except:
+                try:
+                    if thread.isRunning():
+                        thread.quit()
+                        thread.wait()
+                except RuntimeError:
+                    pass
+            # Stop jobs monitoring (thread may already be deleted)
+            try:
+                if self.jobs_thread is not None and self.jobs_thread.isRunning():
+                    self.jobs_worker.stop()
+                    self.jobs_thread.quit()
+                    self.jobs_thread.wait()
+            except RuntimeError:
+                pass
+            finally:
+                self.jobs_thread = None
+        except Exception:
             pass
 
         event.accept()

@@ -49,38 +49,43 @@ polling:
 pipelines:
   - name: "Sentinel-1 image"
     pipeline: "flood_satellite_image_sentinel_1"
-    description: "Download SAR (VV and VH polarization) imagery from Sentinel-1"
+    description: "Download SAR (VV and VH polarization) imagery from Sentinel-1. Uses the closest acquisition to the start date."
     image: "sentinel1_icon.png"
   
   - name: "Sentinel-2 image"
     pipeline: "fire_satellite_image_sentinel_2"
-    description: "Download optical (B1-B12) imagery from Sentinel-2"
+    description: "Download optical (B1–B12) imagery from Sentinel-2. Uses the closest acquisition to the start date with cloud cover under 10%."
     image: "sentinel2_icon.png"
   
   - name: "Burned area delineation"
     pipeline: "fire_burned_area_delineation"
-    description: "Detect and map burned areas from Sentinel-2 imagery"
+    description: "Detect and map burned areas from Sentinel-2 imagery. Uses the closest acquisition to the start date with cloud cover under 10%."
     image: "burned_area_icon.png"
   
   - name: "Burn Severity estimation"
     pipeline: "fire_burned_area_severity_estimation"
-    description: "Estimate the severity of burned areas using Sentinel-2 imagery"
+    description: "Estimate the severity of burned areas using Sentinel-2 imagery. Uses the closest acquisition to the start date with cloud cover under 10%."
     image: "burn_severity_icon.png"
   
   - name: "Active Flames and Smoke detection"
     pipeline: "fire_active_flames_and_smoke_detection"
-    description: "Detect active fires fronts and smoke"
+    description: "Detect active fire fronts and smoke from Sentinel-2. Uses the closest acquisition to the start date with cloud cover under 10%."
     image: "active_fire_icon.png"
   
   - name: "Waterbody delineation"
     pipeline: "flood_post_waterbody_delineation"
-    description: "Map water bodies and flooded areas from Sentinel-1 imagery"
+    description: "Map water bodies and flooded areas from Sentinel-1 imagery. Uses the closest acquisition to the start date."
     image: "waterbody_icon.png"
   
   - name: "Water depth estimation"
     pipeline: "flood_post_waterdepth_estimation"
-    description: "Estimate water depth in flooded regions from Sentinel-1 imagery and DTM"
+    description: "Estimate water depth in flooded regions from Sentinel-1 imagery and DTM. Uses the closest acquisition to the start date."
     image: "water_depth_icon.png"
+
+  - name: "Landcover segmentation"
+    pipeline: "land_cover_sentinel_2"
+    description: "Landcover segmentation with cloud mask as 10th class. Uses the least cloudy Sentinel-2 image in the selected date interval."
+    image: "landcover.png"
 
 # Image Type Mapping
 # Maps display names to internal image type identifiers
@@ -102,6 +107,7 @@ styles:
     "fire_satellite_image_sentinel_2": "fire_satellite_image_sentinel_2.qml"
     "flood_satellite_image_sentinel_1": "flood_satellite_image_sentinel_1.qml"
     "flood_post_waterdepth_estimation": "flood_post_waterdepth_estimation.qml"
+    "land_cover_sentinel_2": "landcover_segmentation.qml"
 
 # File Path Configuration
 paths:
