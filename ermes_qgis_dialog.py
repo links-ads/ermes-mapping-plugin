@@ -38,7 +38,9 @@ from qgis.core import (
     QgsApplication,
     QgsWkbTypes,
     QgsTask,
+    QgsLayerTreeLayer,
 )
+from qgis.analysis import QgsRasterCalculator, QgsRasterCalculatorEntry
 import uuid
 from qgis.utils import iface
 from qgis.PyQt import uic, QtWidgets
@@ -187,7 +189,13 @@ class ErmesQGISDialog(QDockWidget):
             "flood_post_waterdepth_estimation",
         }
         self.LANDCOVER_DATATYPE_IDS = {"land_cover_sentinel_2"}
+        self.S2_DATATYPE_ID = "fire_satellite_image_sentinel_2"
         self._last_valid_pipeline_selection = []  # list of display names (pipeline_info keys)
+        # Sentinel-2 display options (RGB, SWIR, NDVI) - widget and checkboxes set in setup_layer_type_list
+        self._s2_options_widget = None
+        self._s2_rgb_cb = None
+        self._s2_swir_cb = None
+        self._s2_ndvi_cb = None
         # Widgets that form the "AOI + date range" block (shown only when at least one pipeline is selected)
         self._aoi_date_block_widgets = []
         # Pipeline checkboxes by category (display_name -> QCheckBox); set in setup_layer_type_list
@@ -313,6 +321,8 @@ class ErmesQGISDialog(QDockWidget):
         self.current_job_id = None
         # Job ID -> pipeline name (for job log box titles from Request tab)
         self._job_pipeline = {}
+        # Job ID -> list of "rgb"|"swir"|"ndvi" for Sentinel-2 multi-view (Request/From Layer only)
+        self._job_s2_visualizations = {}
         # Job ID -> final outcome (True=success, False=error) set by worker.job_ended
         self._job_outcome = {}
 
@@ -552,9 +562,7 @@ class ErmesQGISDialog(QDockWidget):
             status_label.setStyleSheet("color: #555;")
             try:
                 url = f"{self.api_base_url}{self.config.api_endpoints['request_password_reset']}"
-                resp = requests.post(
-                    url, json={"username": username, "email": email}
-                )
+                resp = requests.post(url, json={"username": username, "email": email})
                 resp.raise_for_status()
                 data = resp.json()
                 token = data.get("reset_token") if isinstance(data, dict) else None
@@ -1039,6 +1047,27 @@ class ErmesQGISDialog(QDockWidget):
         layout.setContentsMargins(2, 2, 2, 2)
         self._pipeline_checkboxes.clear()
 
+        # Sentinel-2 display options (RGB, SWIR, NDVI) - inserted right below "Sentinel-2 image" row
+        s2_frame = QtWidgets.QFrame()
+        s2_frame.setStyleSheet("margin-left: 18px;")
+        s2_layout = QVBoxLayout(s2_frame)
+        s2_layout.setContentsMargins(0, 4, 0, 4)
+        s2_label = QtWidgets.QLabel("Display as:")
+        s2_label.setStyleSheet("font-weight: bold; font-size: 10px;")
+        s2_layout.addWidget(s2_label)
+        self._s2_rgb_cb = QCheckBox("RGB (natural color)")
+        self._s2_swir_cb = QCheckBox("SWIR (false color)")
+        self._s2_ndvi_cb = QCheckBox("NDVI")
+        self._s2_rgb_cb.setChecked(True)
+        self._s2_swir_cb.setChecked(True)
+        for cb in (self._s2_rgb_cb, self._s2_swir_cb, self._s2_ndvi_cb):
+            s2_layout.addWidget(cb)
+        self._s2_options_widget = s2_frame
+        self._s2_options_widget.setVisible(False)
+        self._s2_rgb_cb.stateChanged.connect(lambda: self.validate_form_request())
+        self._s2_swir_cb.stateChanged.connect(lambda: self.validate_form_request())
+        self._s2_ndvi_cb.stateChanged.connect(lambda: self.validate_form_request())
+
         for cat_key in ("satellite", "fire", "flood", "landcover"):
             pipelines = by_category.get(cat_key, [])
             if not pipelines:
@@ -1076,6 +1105,8 @@ class ErmesQGISDialog(QDockWidget):
                 self._pipeline_checkboxes[layer_name] = cb
                 row_layout.addWidget(cb, 1)
                 layout.addWidget(row)
+                if layer_name == "Sentinel-2 image":
+                    layout.addWidget(self._s2_options_widget)
             layout.addSpacing(4)
 
         content.setLayout(layout)
@@ -1113,6 +1144,7 @@ class ErmesQGISDialog(QDockWidget):
             name for name, cb in self._pipeline_checkboxes.items() if cb.isChecked()
         ]
         self._update_aoi_date_block_visibility(self._get_selected_pipeline_items())
+        self._update_s2_options_visibility()
         self._on_pipeline_selection_changed()
 
     def _on_pipeline_checkbox_toggled(self, display_name, category, checked):
@@ -1122,7 +1154,27 @@ class ErmesQGISDialog(QDockWidget):
         ]
         self._update_aoi_date_block_visibility(self._get_selected_pipeline_items())
         self._on_pipeline_selection_changed()
+        self._update_s2_options_visibility()
         self.validate_form_request()
+
+    def _update_s2_options_visibility(self):
+        """Show Sentinel-2 display options (RGB, SWIR, NDVI) only when Sentinel-2 image is selected."""
+        if self._s2_options_widget is None:
+            return
+        selected = self._get_selected_pipeline_items()
+        names = [item.data(Qt.UserRole) for item in selected] if selected else []
+        self._s2_options_widget.setVisible("Sentinel-2 image" in names)
+
+    def _get_s2_visualization_options(self):
+        """Return list of selected S2 display options: 'rgb', 'swir', 'ndvi'."""
+        out = []
+        if self._s2_rgb_cb and self._s2_rgb_cb.isChecked():
+            out.append("rgb")
+        if self._s2_swir_cb and self._s2_swir_cb.isChecked():
+            out.append("swir")
+        if self._s2_ndvi_cb and self._s2_ndvi_cb.isChecked():
+            out.append("ndvi")
+        return out
 
     def _update_aoi_date_block_visibility(self, selected):
         """Show the AOI + date range block only when at least one pipeline is selected."""
@@ -1563,6 +1615,10 @@ class ErmesQGISDialog(QDockWidget):
                     self.update_status(
                         f"Job created with ID: {job_id} for {pipeline_text}", "info"
                     )
+                    if pipeline_text == "Sentinel-2 image":
+                        self._job_s2_visualizations[job_id] = (
+                            self._get_s2_visualization_options()
+                        )
                     # Start monitoring this job immediately so partial 429 still monitors earlier jobs
                     self.start_listening(job_id, pipeline_text=pipeline_text)
                 except requests.exceptions.HTTPError as http_err:
@@ -1618,6 +1674,12 @@ class ErmesQGISDialog(QDockWidget):
         # Check layer type selection
         selected_layer_type = self._get_selected_pipeline_items()
         if not selected_layer_type:
+            self.requestPushButton.setEnabled(False)
+            return
+
+        # If Sentinel-2 image is selected, at least one display option (RGB, SWIR, NDVI) must be chosen
+        names = [item.data(Qt.UserRole) for item in selected_layer_type]
+        if "Sentinel-2 image" in names and not self._get_s2_visualization_options():
             self.requestPushButton.setEnabled(False)
             return
 
@@ -1803,7 +1865,12 @@ class ErmesQGISDialog(QDockWidget):
                 "File upload completed successfully. Loading result into QGIS...",
                 "success",
             )
-            self.load_layer(temp_file_path, datatype_id)
+            s2_opts = (
+                self._get_s2_visualization_options()
+                if datatype_id == self.S2_DATATYPE_ID
+                else None
+            )
+            self.load_layer(temp_file_path, datatype_id, s2_options=s2_opts)
 
             # Clear current job ID after completion
             self.current_job_id = None
@@ -1854,7 +1921,9 @@ class ErmesQGISDialog(QDockWidget):
         # Use lambda to pass the thread, worker, and job_id to the cleanup method
         thread.finished.connect(lambda: self.cleanup_thread(thread, worker, job_id))
 
-        worker.layer_ready.connect(self.load_layer)
+        worker.layer_ready.connect(
+            lambda path, datatype_id, job_id: self.load_layer(path, datatype_id, job_id)
+        )
         # Connect status updates with job_id using lambda to capture it
         worker.status_updated.connect(
             lambda msg: self.update_status_for_job(job_id, msg, "info")
@@ -1887,19 +1956,119 @@ class ErmesQGISDialog(QDockWidget):
         """Store the final outcome for a job (used by cleanup_thread)."""
         self._job_outcome[job_id] = success
 
-    def load_layer(self, file_path, datatype_id=None):
-        """Loads the downloaded file into QGIS. This runs on the main thread."""
+    def _compute_ndvi_from_raster(self, raster_path, out_path):
+        """Compute NDVI (Sentinel-2: band 4 Red, band 8 NIR) to out_path. Returns True on success."""
+        layer = QgsRasterLayer(raster_path, "s2_ndvi_src")
+        if not layer.isValid():
+            return False
+        red = QgsRasterCalculatorEntry()
+        red.ref = "red@1"
+        red.raster = layer
+        red.bandNumber = 4
+        nir = QgsRasterCalculatorEntry()
+        nir.ref = "nir@1"
+        nir.raster = layer
+        nir.bandNumber = 8
+        expr = "(nir@1 - red@1) / (nir@1 + red@1 + 0.0001)"
+        calc = QgsRasterCalculator(
+            expr,
+            out_path,
+            "GTiff",
+            layer.extent(),
+            layer.width(),
+            layer.height(),
+            [red, nir],
+        )
+        return calc.processCalculation() == 0
+
+    def _add_s2_multiview_layers(self, tiff_path, base_name, s2_options, group=None):
+        """Add one layer per S2 option (rgb, swir, ndvi) from the same raster. Optionally add to group."""
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        style_dir = os.path.join(os.path.dirname(__file__), self.style_root)
+        s2_style_path = os.path.join(
+            style_dir, self.style_map.get(self.S2_DATATYPE_ID, "")
+        )
+        s2_rgb_style_path = os.path.join(
+            style_dir, "fire_satellite_image_sentinel_2_rgb.qml"
+        )
+        ndvi_style_path = os.path.join(style_dir, "ndvi.qml")
+        layers_added = []
+
+        for opt in s2_options:
+            if opt == "rgb":
+                layer = QgsRasterLayer(tiff_path, f"{base_name} (RGB)")
+                if not layer.isValid():
+                    continue
+                if os.path.exists(s2_rgb_style_path):
+                    layer.loadNamedStyle(s2_rgb_style_path)
+                    layer.triggerRepaint()
+                project.addMapLayer(layer, False)
+                layers_added.append(layer)
+            elif opt == "swir":
+                layer = QgsRasterLayer(tiff_path, f"{base_name} (SWIR)")
+                if not layer.isValid():
+                    continue
+                if os.path.exists(s2_style_path):
+                    layer.loadNamedStyle(s2_style_path)
+                    layer.triggerRepaint()
+                project.addMapLayer(layer, False)
+                layers_added.append(layer)
+            elif opt == "ndvi":
+                safe_name = base_name.replace(os.sep, "_").replace(" ", "_")
+                ndvi_path = os.path.join(
+                    tempfile.gettempdir(),
+                    self.config.temp_dir_prefix + "ndvi_" + safe_name + ".tif",
+                )
+                if not self._compute_ndvi_from_raster(tiff_path, ndvi_path):
+                    self.update_status("NDVI computation failed.", "warning")
+                    continue
+                layer = QgsRasterLayer(ndvi_path, f"{base_name} (NDVI)")
+                if not layer.isValid():
+                    continue
+                if os.path.exists(ndvi_style_path):
+                    layer.loadNamedStyle(ndvi_style_path)
+                    layer.triggerRepaint()
+                project.addMapLayer(layer, False)
+                layers_added.append(layer)
+
+        for layer in layers_added:
+            if group is not None:
+                group.addLayer(layer)
+            else:
+                root.insertChildNode(0, QgsLayerTreeLayer(layer))
+        self.update_status(
+            f"Loaded {len(layers_added)} Sentinel-2 view(s): {', '.join(s2_options)}",
+            "success",
+        )
+
+    def load_layer(self, file_path, datatype_id=None, job_id=None, s2_options=None):
+        """Loads the downloaded file into QGIS. This runs on the main thread.
+        job_id is set when called from job monitoring; S2 display options come from _job_s2_visualizations or s2_options (From Layer).
+        """
         self.update_status(
             f"Loading retrieved layer: {os.path.basename(file_path)}", "info"
         )
         layer_name = os.path.splitext(os.path.basename(file_path))[0]
 
+        # Resolve Sentinel-2 display options (Request tab: from job_id; From Layer: passed as s2_options; Jobs tab: None = single default layer)
+        if (
+            s2_options is None
+            and job_id is not None
+            and datatype_id == self.S2_DATATYPE_ID
+        ):
+            s2_options = self._job_s2_visualizations.pop(job_id, None)
+
         # --- HANDLE ZIP ARCHIVES ---
         if file_path.lower().endswith(".zip"):
-            self.handle_zip_file(file_path, layer_name, datatype_id)
+            self.handle_zip_file(
+                file_path, layer_name, datatype_id, s2_options=s2_options
+            )
         # --- HANDLE SINGLE TIF/TIFF FILES ---
         elif file_path.lower().endswith((".tif", ".tiff")):
-            self.handle_single_tif(file_path, layer_name, datatype_id)
+            self.handle_single_tif(
+                file_path, layer_name, datatype_id, s2_options=s2_options
+            )
         # --- HANDLE UNSUPPORTED FILES ---
         else:
             self.update_status(
@@ -1907,8 +2076,14 @@ class ErmesQGISDialog(QDockWidget):
                 "warning",
             )
 
-    def handle_single_tif(self, file_path, layer_name, datatype_id=None):
-        """Loads a single TIF file as a QGIS layer and applies a style."""
+    def handle_single_tif(
+        self, file_path, layer_name, datatype_id=None, s2_options=None
+    ):
+        """Loads a single TIF file as a QGIS layer and applies a style. For S2 with s2_options, creates multiple views (RGB/SWIR/NDVI)."""
+        if datatype_id == self.S2_DATATYPE_ID and s2_options:
+            self._add_s2_multiview_layers(file_path, layer_name, s2_options, group=None)
+            return
+
         self.update_status(f"Loading raster layer: {layer_name}", "info")
         layer = QgsRasterLayer(file_path, layer_name)
 
@@ -1954,9 +2129,10 @@ class ErmesQGISDialog(QDockWidget):
             root.removeChildNode(node)
         self.update_status(f"Successfully loaded {layer_name}", "success")
 
-    def handle_zip_file(self, zip_path, group_name, datatype_id=None):
+    def handle_zip_file(self, zip_path, group_name, datatype_id=None, s2_options=None):
         """
         Unzips an archive and loads all contained .tif files into a new layer group, applying a style to each.
+        For Sentinel-2 with s2_options, only the first .tif is used to create RGB/SWIR/NDVI views in the group.
         """
         # Use a temporary directory that is automatically cleaned up
         extract_dir = tempfile.mkdtemp(prefix=self.config.temp_dir_prefix)
@@ -2003,6 +2179,13 @@ class ErmesQGISDialog(QDockWidget):
 
         # Create a new group in the layer tree at position 0. The group_name comes from layer_name.
         group = root.insertGroup(0, group_name)
+
+        # Sentinel-2 multi-view: one raster, multiple layers (RGB/SWIR/NDVI) from first tif only
+        if datatype_id == self.S2_DATATYPE_ID and s2_options:
+            first_tif = tiff_files[0]
+            base_name = os.path.splitext(os.path.basename(first_tif))[0]
+            self._add_s2_multiview_layers(first_tif, base_name, s2_options, group=group)
+            return
 
         # Get style path if datatype_id is available and in the style map
         style_path = None

@@ -11,9 +11,7 @@ class MainWorker(QObject):
     # Signals when Worker is finished, triggers clean-up and closes thread
     finished = pyqtSignal()
     # Signals when the layer is ready to be downloaded on Datalake
-    layer_ready = pyqtSignal(
-        str, str
-    )  # Changed from str to str, str to accept both local_path and datatype_id
+    layer_ready = pyqtSignal(str, str, int)  # local_path, datatype_id, job_id
     # Used for INFO logging
     status_updated = pyqtSignal(str)
     log_separator = pyqtSignal()
@@ -160,9 +158,9 @@ class MainWorker(QObject):
                                     f"Job {self.job_id} image metadata: {', '.join(parts)}"
                                 )
                             local_path = self._download_resource()
-                            # Emit also the datatype_id associated to the job
+                            # Emit also the datatype_id and job_id for S2 multi-view handling
                             datatype_id = job_status.get("body", {}).get("datatype_id")
-                            self.layer_ready.emit(local_path, datatype_id)
+                            self.layer_ready.emit(local_path, datatype_id, self.job_id)
                             self.job_ended.emit(True)
                         else:
                             self.error.emit(
