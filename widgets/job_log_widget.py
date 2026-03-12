@@ -11,10 +11,10 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFontMetrics
 
 
-# Tick-on-message progress: band 10..90, step 7, wrap at 90 -> 30
+# Progress band while running: reserve 100 for terminal state.
 _PROGRESS_STEP = 7
 _PROGRESS_MIN = 10
-_PROGRESS_MAX_RUNNING = 90
+_PROGRESS_MAX_RUNNING = 95
 _PROGRESS_WRAP = 30
 
 
@@ -27,6 +27,8 @@ class JobRowWidget(QFrame):
         self.title_text = title
         self.messages = []  # list of (message, level) for full log dialog
         self._progress_value = _PROGRESS_MIN
+        self._expected_messages = None
+        self._completed_messages = 0
         self._finished = False  # once True, progress stays at 100
         self.setup_ui()
 
@@ -101,11 +103,64 @@ class JobRowWidget(QFrame):
         formatted = f"[{level.upper()}] {text_for_preview}"
         self.last_message_label.setText(self._elide(formatted))
         self.last_message_label.setToolTip(f"[{level.upper()}] {message}")
-        if not self._finished:
+        if not self._finished and self._expected_messages is None:
             self._progress_value = min(_PROGRESS_MAX_RUNNING, self._progress_value + _PROGRESS_STEP)
             if self._progress_value >= _PROGRESS_MAX_RUNNING:
                 self._progress_value = _PROGRESS_WRAP
             self.progress_bar.setValue(self._progress_value)
+
+    def set_expected_messages(self, total):
+        """Enable proportional progress mode for this row."""
+        if total is None:
+            return
+        try:
+            total = int(total)
+        except (TypeError, ValueError):
+            return
+        if total <= 0:
+            return
+        self._expected_messages = total
+        if self._completed_messages > self._expected_messages:
+            self._completed_messages = self._expected_messages
+        self._update_progress_from_counts()
+
+    def mark_completed_message(self, increment=1):
+        """Mark completed workload unit(s) for proportional progress mode."""
+        if self._expected_messages is None:
+            return
+        if self._finished:
+            return
+        try:
+            increment = int(increment)
+        except (TypeError, ValueError):
+            increment = 1
+        if increment <= 0:
+            return
+        self._completed_messages = min(
+            self._expected_messages, self._completed_messages + increment
+        )
+        self._update_progress_from_counts()
+
+    def set_completed_messages(self, count):
+        """Set absolute completed workload for proportional mode."""
+        if self._expected_messages is None:
+            return
+        try:
+            count = int(count)
+        except (TypeError, ValueError):
+            return
+        if count < 0:
+            count = 0
+        self._completed_messages = min(self._expected_messages, count)
+        self._update_progress_from_counts()
+
+    def _update_progress_from_counts(self):
+        if self._finished or self._expected_messages is None:
+            return
+        ratio = min(1.0, self._completed_messages / float(self._expected_messages))
+        running_span = _PROGRESS_MAX_RUNNING - _PROGRESS_MIN
+        self._progress_value = _PROGRESS_MIN + int(running_span * ratio)
+        self.progress_bar.setValue(self._progress_value)
 
     def _elide(self, text, width=None):
         if width is None:
@@ -390,6 +445,25 @@ class JobLogWidget(QWidget):
             box.add_message(message, level, display_message=display_message)
         else:
             box.add_message(message, level)
+
+    def set_expected_messages(self, box_type, total):
+        box = self._get_or_create_box(box_type)
+        if isinstance(box, JobRowWidget):
+            box.set_expected_messages(total)
+
+    def mark_completed_message(self, box_type, increment=1):
+        if box_type not in self.message_boxes:
+            return
+        box = self.message_boxes[box_type]
+        if isinstance(box, JobRowWidget):
+            box.mark_completed_message(increment)
+
+    def set_completed_messages(self, box_type, count):
+        if box_type not in self.message_boxes:
+            return
+        box = self.message_boxes[box_type]
+        if isinstance(box, JobRowWidget):
+            box.set_completed_messages(count)
 
     def update_status(self, box_type, status_text, color="black"):
         if box_type not in self.message_boxes:

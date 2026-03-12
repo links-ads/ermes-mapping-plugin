@@ -692,6 +692,19 @@
                   </item>
                  </widget>
                 </item>
+                <item row="3" column="0" colspan="2">
+                 <widget class="QCheckBox" name="polygonOutputCheckBox">
+                  <property name="text">
+                   <string>Output polygons for Burned area / Waterbody</string>
+                  </property>
+                  <property name="toolTip">
+                   <string>When enabled, Burned area delineation and Waterbody delineation results are merged and polygonized (by value, excluding 0) instead of loaded as raster tiles.</string>
+                  </property>
+                  <property name="checked">
+                   <bool>false</bool>
+                  </property>
+                 </widget>
+                </item>
                </layout>
               </widget>
              </item>
@@ -1817,6 +1830,19 @@
              </property>
              <property name="text">
               <string>Download Selected</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="jobsPolygonOutputCheckBox">
+             <property name="text">
+              <string>As polygon</string>
+             </property>
+             <property name="toolTip">
+              <string>When checked, download will merge tiles and load as polygon layer (Burned area / Waterbody only).</string>
+             </property>
+             <property name="checked">
+              <bool>false</bool>
              </property>
             </widget>
            </item>

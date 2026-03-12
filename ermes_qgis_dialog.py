@@ -23,6 +23,7 @@
 """
 
 import os
+import re
 import requests
 import shutil
 import tempfile
@@ -41,6 +42,7 @@ from qgis.core import (
     QgsLayerTreeLayer,
 )
 from qgis.analysis import QgsRasterCalculator, QgsRasterCalculatorEntry
+import processing
 import uuid
 from qgis.utils import iface
 from qgis.PyQt import uic, QtWidgets
@@ -360,6 +362,10 @@ class ErmesQGISDialog(QDockWidget):
         self._job_s2_visualizations = {}
         # Job ID -> final outcome (True=success, False=error) set by worker.job_ended
         self._job_outcome = {}
+        # Job ID -> expected mapped download messages (derived from retrieve_tiles status)
+        self._job_expected_messages = {}
+        # Job ID -> completed mapped stage/tile keys (used to avoid duplicate counting)
+        self._job_completed_steps = {}
 
         self.credentials_path = os.path.join(
             os.path.dirname(__file__), self.config.credentials_file
@@ -845,11 +851,37 @@ class ErmesQGISDialog(QDockWidget):
             return None
         return job_item.text()
 
+    def _get_selected_job_datatype_id(self):
+        """Return datatype_id of the selected job row, or None if no selection or no job data."""
+        row = self._get_selected_job_row()
+        if row < 0:
+            return None
+        job_item = self.jobsTableWidget.item(row, 0)
+        if not job_item:
+            return None
+        job_data = job_item.data(Qt.UserRole)
+        if not job_data or not isinstance(job_data, dict):
+            return None
+        return job_data.get("body", {}).get("datatype_id")
+
     def _update_jobs_action_buttons(self):
         """Enable/disable jobs action buttons based on table selection."""
         has_selection = self._get_selected_job_row() >= 0
         if hasattr(self, "downloadJobButton"):
             self.downloadJobButton.setEnabled(has_selection)
+        # Show "As polygon" checkbox only for Burned area / Waterbody delineation
+        if hasattr(self, "jobsPolygonOutputCheckBox"):
+            datatype_id = (
+                self._get_selected_job_datatype_id() if has_selection else None
+            )
+            polygonizable = datatype_id in (
+                "fire_burned_area_delineation",
+                "flood_post_waterbody_delineation",
+            )
+            self.jobsPolygonOutputCheckBox.setVisible(polygonizable)
+            self.jobsPolygonOutputCheckBox.setEnabled(polygonizable)
+            if not polygonizable:
+                self.jobsPolygonOutputCheckBox.setChecked(False)
 
     def _format_job_date(self, value):
         """Format ISO datetime string as date only for table display (e.g. 2024-06-15T12:00:00 -> 2024-06-15)."""
@@ -1364,7 +1396,7 @@ class ErmesQGISDialog(QDockWidget):
                 "Download completed successfully. Loading result into QGIS...",
                 "success",
             )
-            self.load_layer(file_path, datatype_id)
+            self.load_layer(file_path, datatype_id, from_jobs_download=True)
 
             # Clear current job ID after completion
             self.current_job_id = None
@@ -1971,7 +2003,12 @@ class ErmesQGISDialog(QDockWidget):
                 if datatype_id == self.S2_DATATYPE_ID
                 else None
             )
-            self.load_layer(temp_file_path, datatype_id, s2_options=s2_opts)
+            self.load_layer(
+                temp_file_path,
+                datatype_id,
+                s2_options=s2_opts,
+                request_polygon_output=False,
+            )
 
             # Clear current job ID after completion
             self.current_job_id = None
@@ -2152,9 +2189,148 @@ class ErmesQGISDialog(QDockWidget):
             "success",
         )
 
-    def load_layer(self, file_path, datatype_id=None, job_id=None, s2_options=None):
+    # -------------------------------------------------------------------------
+    # Tile merge and polygon output (Burned area / Waterbody)
+    # -------------------------------------------------------------------------
+
+    POLYGONIZABLE_DATATYPES = frozenset(
+        {
+            "fire_burned_area_delineation",
+            "flood_post_waterbody_delineation",
+        }
+    )
+
+    def _is_polygonizable_datatype(self, datatype_id):
+        """Return True if datatype supports optional polygon output (Burned area, Waterbody)."""
+        return datatype_id in self.POLYGONIZABLE_DATATYPES
+
+    def _is_polygon_output_requested(self, job_id, from_jobs_download=False):
+        """True if user requested polygon output.
+        Request tab (job monitor) uses polygonOutputCheckBox; Jobs tab (Download Selected) uses jobsPolygonOutputCheckBox.
+        """
+        if from_jobs_download:
+            return (
+                getattr(self, "jobsPolygonOutputCheckBox", None)
+                and self.jobsPolygonOutputCheckBox.isChecked()
+            )
+        if job_id is not None:
+            return (
+                getattr(self, "polygonOutputCheckBox", None)
+                and self.polygonOutputCheckBox.isChecked()
+            )
+        return (
+            getattr(self, "jobsPolygonOutputCheckBox", None)
+            and self.jobsPolygonOutputCheckBox.isChecked()
+        )
+
+    def _merge_tiles_to_single_raster(self, tiff_files, base_name):
+        """Merge a list of TIFF paths into one raster. Returns path to merged raster, or None on failure.
+        If only one file, returns that path (no merge step).
+        """
+        if not tiff_files:
+            return None
+        if len(tiff_files) == 1:
+            return tiff_files[0]
+        merged_path = os.path.join(
+            tempfile.gettempdir(),
+            self.config.temp_dir_prefix
+            + "merged_"
+            + base_name.replace(os.sep, "_").replace(" ", "_")
+            + ".tif",
+        )
+        try:
+            result = processing.run(
+                "gdal:merge",
+                {
+                    "INPUT": list(tiff_files),
+                    "OUTPUT": merged_path,
+                },
+            )
+            out = result.get("OUTPUT")
+            if out and os.path.exists(out):
+                return out
+            if os.path.exists(merged_path):
+                return merged_path
+            return None
+        except Exception as e:
+            self.update_status(f"Merge tiles failed: {e}", "error")
+            return None
+
+    def _run_polygon_output_pipeline(self, merged_raster_path, base_name, datatype_id):
+        """Polygonize merged raster, filter out value 0, save to GeoPackage. Returns path to vector or None."""
+        if not merged_raster_path or not os.path.exists(merged_raster_path):
+            return None
+        out_dir = tempfile.gettempdir()
+        safe_name = base_name.replace(os.sep, "_").replace(" ", "_")
+        poly_raw = os.path.join(
+            out_dir, self.config.temp_dir_prefix + "poly_raw_" + safe_name + ".gpkg"
+        )
+        poly_filtered = os.path.join(
+            out_dir, self.config.temp_dir_prefix + "poly_" + safe_name + ".gpkg"
+        )
+        try:
+            processing.run(
+                "gdal:polygonize",
+                {
+                    "INPUT": merged_raster_path,
+                    "BAND": 1,
+                    "OUTPUT": poly_raw,
+                    "OUTPUT_FIELD": "value",
+                },
+            )
+            if not os.path.exists(poly_raw):
+                self.update_status("Polygonize produced no output.", "error")
+                return None
+            # Filter out polygons where DN = 0
+            result = processing.run(
+                "native:extractbyexpression",
+                {
+                    "INPUT": poly_raw,
+                    "EXPRESSION": '"DN" != 0',
+                    "OUTPUT": poly_filtered,
+                },
+            )
+            out = result.get("OUTPUT")
+            if out and os.path.exists(out):
+                return out
+            if os.path.exists(poly_filtered):
+                return poly_filtered
+            return None
+        except Exception as e:
+            self.update_status(f"Polygonize pipeline failed: {e}", "error")
+            return None
+
+    def _load_polygon_layer(self, vector_path, layer_name, group=None):
+        """Load a vector layer from path and add to project, optionally into a group."""
+        layer = QgsVectorLayer(vector_path, layer_name, "ogr")
+        if not layer.isValid():
+            self.update_status(f"Failed to load vector layer: {layer_name}", "error")
+            return
+        project = QgsProject.instance()
+        project.addMapLayer(layer, False)
+        if group is not None:
+            group.addLayer(layer)
+        else:
+            root = project.layerTreeRoot()
+            node = root.findLayer(layer.id())
+            if node is not None:
+                root.insertChildNode(0, node.clone())
+                root.removeChildNode(node)
+        self.update_status(f"Loaded polygon layer: {layer_name}", "success")
+
+    def load_layer(
+        self,
+        file_path,
+        datatype_id=None,
+        job_id=None,
+        s2_options=None,
+        request_polygon_output=None,
+        from_jobs_download=False,
+    ):
         """Loads the downloaded file into QGIS. This runs on the main thread.
         job_id is set when called from job monitoring; S2 display options come from _job_s2_visualizations or s2_options (From Layer).
+        request_polygon_output: when None, derived from Request/Jobs checkbox; when False (e.g. From Layer), polygon path is disabled.
+        from_jobs_download: True when called from Jobs-tab Download Selected completion, so polygon option is read from jobsPolygonOutputCheckBox.
         """
         self.update_status(
             f"Loading retrieved layer: {os.path.basename(file_path)}", "info"
@@ -2169,15 +2345,33 @@ class ErmesQGISDialog(QDockWidget):
         ):
             s2_options = self._job_s2_visualizations.pop(job_id, None)
 
+        # Polygon output: only for Burned area / Waterbody when user requested it (Request or Jobs tab; From Layer passes False)
+        if request_polygon_output is not None:
+            polygon_output = request_polygon_output and self._is_polygonizable_datatype(
+                datatype_id
+            )
+        else:
+            polygon_output = self._is_polygon_output_requested(
+                job_id, from_jobs_download=from_jobs_download
+            ) and self._is_polygonizable_datatype(datatype_id)
+
         # --- HANDLE ZIP ARCHIVES ---
         if file_path.lower().endswith(".zip"):
             self.handle_zip_file(
-                file_path, layer_name, datatype_id, s2_options=s2_options
+                file_path,
+                layer_name,
+                datatype_id,
+                s2_options=s2_options,
+                polygon_output=polygon_output,
             )
         # --- HANDLE SINGLE TIF/TIFF FILES ---
         elif file_path.lower().endswith((".tif", ".tiff")):
             self.handle_single_tif(
-                file_path, layer_name, datatype_id, s2_options=s2_options
+                file_path,
+                layer_name,
+                datatype_id,
+                s2_options=s2_options,
+                polygon_output=polygon_output,
             )
         # --- HANDLE UNSUPPORTED FILES ---
         else:
@@ -2187,16 +2381,32 @@ class ErmesQGISDialog(QDockWidget):
             )
 
     def handle_single_tif(
-        self, file_path, layer_name, datatype_id=None, s2_options=None
+        self,
+        file_path,
+        layer_name,
+        datatype_id=None,
+        s2_options=None,
+        polygon_output=False,
     ):
-        """Loads a single TIF file as a QGIS layer and applies a style. For S2 with s2_options, creates multiple views (RGB/SWIR/NDVI)."""
+        """Loads a single TIF file as a QGIS layer and applies a style. For S2 with s2_options, creates multiple views (RGB/SWIR/NDVI).
+        If polygon_output is True (Burned area/Waterbody only), polygonizes and loads vector instead.
+        """
         if datatype_id == self.S2_DATATYPE_ID and s2_options:
             self._add_s2_multiview_layers(file_path, layer_name, s2_options, group=None)
             return
 
+        if polygon_output and self._is_polygonizable_datatype(datatype_id):
+            self.update_status("Polygonizing raster...", "info")
+            vector_path = self._run_polygon_output_pipeline(
+                file_path, layer_name, datatype_id
+            )
+            if vector_path:
+                self._load_polygon_layer(vector_path, layer_name, group=None)
+                return
+            self.update_status("Polygonize failed, loading as raster.", "warning")
+
         self.update_status(f"Loading raster layer: {layer_name}", "info")
         layer = QgsRasterLayer(file_path, layer_name)
-
         if not layer.isValid():
             self.update_status(
                 f"Error: Failed to load raster layer {layer_name}", "error"
@@ -2239,10 +2449,17 @@ class ErmesQGISDialog(QDockWidget):
             root.removeChildNode(node)
         self.update_status(f"Successfully loaded {layer_name}", "success")
 
-    def handle_zip_file(self, zip_path, group_name, datatype_id=None, s2_options=None):
+    def handle_zip_file(
+        self,
+        zip_path,
+        group_name,
+        datatype_id=None,
+        s2_options=None,
+        polygon_output=False,
+    ):
         """
-        Unzips an archive and loads all contained .tif files into a new layer group, applying a style to each.
-        For Sentinel-2 with s2_options, only the first .tif is used to create RGB/SWIR/NDVI views in the group.
+        Unzips an archive, merges all .tif tiles into one raster, then either loads merged raster (with style or S2 views)
+        or polygonizes and loads vector (Burned area/Waterbody when polygon_output is True).
         """
         # Use a temporary directory that is automatically cleaned up
         extract_dir = tempfile.mkdtemp(prefix=self.config.temp_dir_prefix)
@@ -2283,17 +2500,32 @@ class ErmesQGISDialog(QDockWidget):
             )
             return
 
-        # Get the project instance and the root of the layer tree
-        project = QgsProject.instance()
-        root = project.layerTreeRoot()
-
-        # Create a new group in the layer tree at position 0. The group_name comes from layer_name.
-        group = root.insertGroup(0, group_name)
-
-        # Keep deterministic ordering across platforms/runs.
+        # Keep deterministic ordering
         tiff_files.sort()
 
-        # Sentinel-2 multi-view: create RGB/SWIR/NDVI views for every tif in the archive.
+        # Always merge tiles (single path if one file)
+        self.update_status("Merging tiles...", "info")
+        merged_path = self._merge_tiles_to_single_raster(tiff_files, group_name)
+        if not merged_path or not os.path.exists(merged_path):
+            self.update_status("Merge failed.", "error")
+            return
+
+        project = QgsProject.instance()
+        root = project.layerTreeRoot()
+        group = root.insertGroup(0, group_name)
+
+        # Polygon output for Burned area / Waterbody
+        if polygon_output and self._is_polygonizable_datatype(datatype_id):
+            self.update_status("Polygonizing raster...", "info")
+            vector_path = self._run_polygon_output_pipeline(
+                merged_path, group_name, datatype_id
+            )
+            if vector_path:
+                self._load_polygon_layer(vector_path, group_name, group=group)
+                return
+            self.update_status("Polygonize failed, loading merged raster.", "warning")
+
+        # Sentinel-2 multi-view: one merged raster, RGB/SWIR/NDVI views
         if datatype_id == self.S2_DATATYPE_ID and s2_options:
             option_groups = {}
             if "rgb" in s2_options:
@@ -2302,72 +2534,37 @@ class ErmesQGISDialog(QDockWidget):
                 option_groups["swir"] = group.addGroup("SWIR")
             if "ndvi" in s2_options:
                 option_groups["ndvi"] = group.addGroup("NDVI")
-            for tiff_path in tiff_files:
-                base_name = os.path.splitext(os.path.basename(tiff_path))[0]
-                self._add_s2_multiview_layers(
-                    tiff_path,
-                    base_name,
-                    s2_options,
-                    group=group,
-                    option_groups=option_groups,
-                )
+            self._add_s2_multiview_layers(
+                merged_path,
+                group_name,
+                s2_options,
+                group=group,
+                option_groups=option_groups,
+            )
             return
 
-        # Get style path if datatype_id is available and in the style map
+        # Single merged raster with style
         style_path = None
         if datatype_id and datatype_id in self.style_map:
             style_filename = self.style_map[datatype_id]
             style_path = os.path.join(
                 os.path.dirname(__file__), self.style_root, style_filename
             )
-
-        loaded_count = 0
-        for tiff_path in tiff_files:
-            # Use the tif's own filename as the layer name
-            individual_layer_name = os.path.splitext(os.path.basename(tiff_path))[0]
-
-            layer = QgsRasterLayer(tiff_path, individual_layer_name)
-            if not layer.isValid():
-                self.update_status(
-                    f"Skipping invalid raster: {individual_layer_name}",
-                    "warning",
-                )
-                continue
-
-            # Apply style if available
-            if style_path and os.path.exists(style_path):
-                loaded = layer.loadNamedStyle(style_path)
-                if loaded[0]:
-                    layer.triggerRepaint()
-                    self.update_status(
-                        f"Applied style to {individual_layer_name} from {os.path.basename(style_path)}",
-                        "info",
-                    )
-                else:
-                    pass
-            else:
-                if datatype_id and datatype_id in self.style_map:
-                    self.update_status(
-                        f"Style file not found for {individual_layer_name}, loading without style",
-                        "warning",
-                    )
-                else:
-                    self.update_status(
-                        f"No style applied to {individual_layer_name} - datatype_id not available or not in style map",
-                        "info",
-                    )
-
-            # Add the layer to the project's internal registry, but NOT to the legend yet (False).
-            # This prevents it from appearing at the top level.
-            project.addMapLayer(layer, False)
-
-            # Now, add the layer to our newly created group.
-            group.addLayer(layer)
-            loaded_count += 1
-
+        layer = QgsRasterLayer(merged_path, group_name)
+        if not layer.isValid():
+            self.update_status("Failed to load merged raster.", "error")
+            return
+        if style_path and os.path.exists(style_path):
+            loaded = layer.loadNamedStyle(style_path)
+            if loaded[0]:
+                layer.triggerRepaint()
+            self.update_status(
+                f"Applied style from {os.path.basename(style_path)}", "info"
+            )
+        project.addMapLayer(layer, False)
+        group.addLayer(layer)
         self.update_status(
-            f"Successfully loaded {loaded_count} layer(s) into group '{group_name}'",
-            "success",
+            f"Successfully loaded merged layer into group '{group_name}'", "success"
         )
 
     def validate_form_from_layer(self):
@@ -2435,6 +2632,50 @@ class ErmesQGISDialog(QDockWidget):
     # Status updates (request and from layer tabs)
     # ------------------------------------------------------------------------------------------------
 
+    def _set_expected_progress_for_job(self, job_id, total_expected):
+        """Configure expected running steps for proportional progress."""
+        if total_expected <= 0:
+            return
+        # Mapped workflows emit two progress-worthy messages per tile.
+        expected_messages = total_expected * 2
+        self._job_expected_messages[job_id] = expected_messages
+        completed_count = len(self._job_completed_steps.get(job_id, set()))
+        if hasattr(self, "job_log_widget_1"):
+            self.job_log_widget_1.set_expected_messages(str(job_id), expected_messages)
+            self.job_log_widget_1.set_completed_messages(str(job_id), completed_count)
+        if hasattr(self, "job_log_widget_2"):
+            self.job_log_widget_2.set_expected_messages(str(job_id), expected_messages)
+            self.job_log_widget_2.set_completed_messages(str(job_id), completed_count)
+
+    def _mark_completed_progress_for_job(self, job_id, stage_name, tile_name):
+        """Mark one mapped stage/tile completion for progress counting."""
+        completed_steps = self._job_completed_steps.setdefault(job_id, set())
+        step_key = f"{stage_name}|{tile_name}"
+        if step_key in completed_steps:
+            return
+        completed_steps.add(step_key)
+        if job_id not in self._job_expected_messages:
+            return
+        if hasattr(self, "job_log_widget_1"):
+            self.job_log_widget_1.mark_completed_message(str(job_id), 1)
+        if hasattr(self, "job_log_widget_2"):
+            self.job_log_widget_2.mark_completed_message(str(job_id), 1)
+
+    def _update_job_progress_from_message(self, job_id, message):
+        """Parse workflow status hints and update proportional progress state."""
+        if not message:
+            return
+
+        total_match = re.search(r"\[total_tiles=(\d+)\]", message)
+        if total_match:
+            self._set_expected_progress_for_job(job_id, int(total_match.group(1)))
+
+        done_match = re.search(r"(.+?) completed successfully \[([^\]]+)\]", message)
+        if done_match:
+            stage_name = done_match.group(1).strip().lower()
+            tile_name = done_match.group(2)
+            self._mark_completed_progress_for_job(job_id, stage_name, tile_name)
+
     def update_status_for_job(self, job_id, message, level="info", pipeline=None):
         """
         Updates the status for a specific job ID.
@@ -2458,6 +2699,7 @@ class ErmesQGISDialog(QDockWidget):
         pipeline_for_widget = (
             pipeline if pipeline is not None else self._job_pipeline.get(job_id)
         )
+        self._update_job_progress_from_message(job_id, message)
 
         # Shorten preview only: strip redundant "Job {id} status:" / "Job {id} " prefix
         display_message = message
@@ -2652,6 +2894,8 @@ class ErmesQGISDialog(QDockWidget):
         else:
             self.update_status_for_job(job_id, f"Job {job_id} failed", "error")
         self._job_outcome.pop(job_id, None)
+        self._job_expected_messages.pop(job_id, None)
+        self._job_completed_steps.pop(job_id, None)
 
         # If all jobs are finished, hide loading indicator
         if not self.has_active_jobs():
