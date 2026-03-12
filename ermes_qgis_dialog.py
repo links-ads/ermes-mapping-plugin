@@ -257,13 +257,9 @@ class ErmesQGISDialog(QDockWidget):
 
         self.requestPushButton.clicked.connect(self.send_request)
 
-        # Advanced options (Request tab): collapse/expand content when toggled
-        self.advancedOptionsContentWidget.setVisible(
-            self.advancedOptionsGroupBox.isChecked()
-        )
-        self.advancedOptionsGroupBox.toggled.connect(
-            lambda checked: self.advancedOptionsContentWidget.setVisible(checked)
-        )
+        # Advanced options (Request tab): keep content visible; QGroupBox checked state
+        # controls whether fields are active (disabled but visible when unchecked).
+        self.advancedOptionsContentWidget.setVisible(True)
         self.cloudCoverSlider.valueChanged.connect(self._on_cloud_cover_slider_changed)
         self._on_cloud_cover_slider_changed(self.cloudCoverSlider.value())
         # Store backend values in combo box item data (display text is user-friendly)
@@ -271,6 +267,10 @@ class ErmesQGISDialog(QDockWidget):
         self.stacOrderComboBox.setItemData(1, "eo:cloud_cover")
         self.stacDirectionComboBox.setItemData(0, "desc")
         self.stacDirectionComboBox.setItemData(1, "asc")
+        # Keep defaults aligned with initial UI values/options.
+        self._default_stac_threshold = self.cloudCoverSlider.value()
+        self._default_stac_order = self.stacOrderComboBox.itemData(0) or "datetime"
+        self._default_stac_direction = self.stacDirectionComboBox.itemData(0) or "desc"
 
         # From Layer
         self.rasterLayerComboBox.layerChanged.connect(self.validate_form_from_layer)
@@ -1141,10 +1141,10 @@ class ErmesQGISDialog(QDockWidget):
 
         # Group pipelines by category
         category_label = {
-            "satellite": "Satellite image",
-            "fire": "Fire",
-            "flood": "Flood",
-            "landcover": "Landcover",
+            "satellite": "Satellite sources",
+            "fire": "Wildfires",
+            "flood": "Floods",
+            "landcover": "Land Use",
         }
         by_category = {"satellite": [], "fire": [], "flood": [], "landcover": []}
         for layer_name, layer_data in self.pipeline_info.items():
@@ -1343,6 +1343,7 @@ class ErmesQGISDialog(QDockWidget):
     def _on_pipeline_selection_changed(self):
         """Update date UI based on selected pipeline(s); all pipelines use start + end date."""
         selected = self._get_selected_pipeline_items()
+        self._update_advanced_options_state(selected)
         if not selected:
             return
         self.startDateLineEdit.setVisible(True)
@@ -1350,6 +1351,61 @@ class ErmesQGISDialog(QDockWidget):
             self.timeLabel.setVisible(True)
         self.endDateLineEdit.setPlaceholderText("Select end date")
         self.validate_form_request()
+
+    def _is_advanced_options_available(self, selected_items=None):
+        """Advanced options apply only when at least one satellite pipeline is selected."""
+        selected = (
+            selected_items
+            if selected_items is not None
+            else self._get_selected_pipeline_items()
+        )
+        for item in selected:
+            display_name = item.data(Qt.UserRole)
+            datatype_id = self.pipeline_map.get(display_name)
+            if datatype_id in self.SATELLITE_IMAGE_DATATYPE_IDS:
+                return True
+        return False
+
+    def _update_advanced_options_state(self, selected_items=None):
+        """Show advanced options as disabled (not hidden) when unavailable."""
+        available = self._is_advanced_options_available(selected_items)
+        self.advancedOptionsGroupBox.setEnabled(available)
+        if available:
+            self.advancedOptionsGroupBox.setToolTip("")
+        else:
+            self.advancedOptionsGroupBox.setToolTip(
+                "Advanced options are available only for satellite layer types."
+            )
+
+    def _get_stac_params_for_request(self):
+        """Build STAC params for API requests.
+
+        Use user-selected advanced values only when advanced options are both available
+        and checked. Otherwise, send default STAC values.
+        """
+        use_custom = (
+            self.advancedOptionsGroupBox.isEnabled()
+            and self.advancedOptionsGroupBox.isChecked()
+        )
+        if use_custom:
+            stac_threshold = self.cloudCoverSlider.value()
+            stac_order = self.stacOrderComboBox.currentData() or (
+                "eo:cloud_cover" if self.stacOrderComboBox.currentIndex() == 1 else "datetime"
+            )
+            stac_direction = self.stacDirectionComboBox.currentData() or (
+                "asc" if self.stacDirectionComboBox.currentIndex() == 1 else "desc"
+            )
+            return {
+                "stac_threshold": stac_threshold,
+                "stac_order": stac_order,
+                "stac_direction": stac_direction,
+            }
+
+        return {
+            "stac_threshold": self._default_stac_threshold,
+            "stac_order": self._default_stac_order,
+            "stac_direction": self._default_stac_direction,
+        }
 
     def start_jobs_monitoring(self):
         """Start monitoring jobs from the API"""
@@ -1720,22 +1776,10 @@ class ErmesQGISDialog(QDockWidget):
                     "start_date": start_dt,
                     "end_date": end_dt,
                 }
-                # Optional advanced STAC overrides
-                if self.advancedOptionsGroupBox.isChecked():
-                    job_data["stac_threshold"] = self.cloudCoverSlider.value()
-                    job_data["stac_order"] = self.stacOrderComboBox.currentData() or (
-                        "eo:cloud_cover"
-                        if self.stacOrderComboBox.currentIndex() == 1
-                        else "datetime"
-                    )
-                    job_data["stac_direction"] = (
-                        self.stacDirectionComboBox.currentData()
-                        or (
-                            "asc"
-                            if self.stacDirectionComboBox.currentIndex() == 1
-                            else "desc"
-                        )
-                    )
+                # Always send STAC parameters:
+                # - custom values only when advanced options are active+checked
+                # - defaults when advanced options are inactive/unchecked
+                job_data.update(self._get_stac_params_for_request())
 
                 try:
                     job_response = requests.post(
