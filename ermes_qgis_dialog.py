@@ -1981,8 +1981,12 @@ class ErmesQGISDialog(QDockWidget):
         )
         return calc.processCalculation() == 0
 
-    def _add_s2_multiview_layers(self, tiff_path, base_name, s2_options, group=None):
-        """Add one layer per S2 option (rgb, swir, ndvi) from the same raster. Optionally add to group."""
+    def _add_s2_multiview_layers(
+        self, tiff_path, base_name, s2_options, group=None, option_groups=None
+    ):
+        """Add one layer per S2 option (rgb, swir, ndvi) from the same raster.
+        Optionally add to a single group or to per-option groups.
+        """
         project = QgsProject.instance()
         root = project.layerTreeRoot()
         style_dir = os.path.join(os.path.dirname(__file__), self.style_root)
@@ -2004,7 +2008,7 @@ class ErmesQGISDialog(QDockWidget):
                     layer.loadNamedStyle(s2_rgb_style_path)
                     layer.triggerRepaint()
                 project.addMapLayer(layer, False)
-                layers_added.append(layer)
+                layers_added.append((opt, layer))
             elif opt == "swir":
                 layer = QgsRasterLayer(tiff_path, f"{base_name} (SWIR)")
                 if not layer.isValid():
@@ -2013,7 +2017,7 @@ class ErmesQGISDialog(QDockWidget):
                     layer.loadNamedStyle(s2_style_path)
                     layer.triggerRepaint()
                 project.addMapLayer(layer, False)
-                layers_added.append(layer)
+                layers_added.append((opt, layer))
             elif opt == "ndvi":
                 safe_name = base_name.replace(os.sep, "_").replace(" ", "_")
                 ndvi_path = os.path.join(
@@ -2030,10 +2034,15 @@ class ErmesQGISDialog(QDockWidget):
                     layer.loadNamedStyle(ndvi_style_path)
                     layer.triggerRepaint()
                 project.addMapLayer(layer, False)
-                layers_added.append(layer)
+                layers_added.append((opt, layer))
 
-        for layer in layers_added:
-            if group is not None:
+        for opt, layer in layers_added:
+            target_group = None
+            if option_groups:
+                target_group = option_groups.get(opt)
+            if target_group is not None:
+                target_group.addLayer(layer)
+            elif group is not None:
                 group.addLayer(layer)
             else:
                 root.insertChildNode(0, QgsLayerTreeLayer(layer))
@@ -2180,11 +2189,27 @@ class ErmesQGISDialog(QDockWidget):
         # Create a new group in the layer tree at position 0. The group_name comes from layer_name.
         group = root.insertGroup(0, group_name)
 
-        # Sentinel-2 multi-view: one raster, multiple layers (RGB/SWIR/NDVI) from first tif only
+        # Keep deterministic ordering across platforms/runs.
+        tiff_files.sort()
+
+        # Sentinel-2 multi-view: create RGB/SWIR/NDVI views for every tif in the archive.
         if datatype_id == self.S2_DATATYPE_ID and s2_options:
-            first_tif = tiff_files[0]
-            base_name = os.path.splitext(os.path.basename(first_tif))[0]
-            self._add_s2_multiview_layers(first_tif, base_name, s2_options, group=group)
+            option_groups = {}
+            if "rgb" in s2_options:
+                option_groups["rgb"] = group.addGroup("RGB")
+            if "swir" in s2_options:
+                option_groups["swir"] = group.addGroup("SWIR")
+            if "ndvi" in s2_options:
+                option_groups["ndvi"] = group.addGroup("NDVI")
+            for tiff_path in tiff_files:
+                base_name = os.path.splitext(os.path.basename(tiff_path))[0]
+                self._add_s2_multiview_layers(
+                    tiff_path,
+                    base_name,
+                    s2_options,
+                    group=group,
+                    option_groups=option_groups,
+                )
             return
 
         # Get style path if datatype_id is available and in the style map
