@@ -173,6 +173,10 @@ class ErmesQGISDialog(QDockWidget):
         self.tabWidget.setTabEnabled(2, False)  # From Layer
         self.tabWidget.setTabEnabled(3, False)  # Jobs
         self.tabWidget.setCurrentIndex(0)  # Switch to Login tab
+        self._set_from_layer_tab_visibility(False)
+        if hasattr(self, "deleteJobButton"):
+            self.deleteJobButton.setVisible(False)
+            self.deleteJobButton.setEnabled(False)
 
         # Pipeline categories for same-category multi-select (fire with fire, flood with flood, etc.)
         self.SATELLITE_IMAGE_DATATYPE_IDS = {
@@ -280,6 +284,8 @@ class ErmesQGISDialog(QDockWidget):
         # Jobs tab
         self.downloadJobButton.clicked.connect(self.download_selected_jobs)
         self.refreshJobsButton.clicked.connect(self.refresh_jobs_table)
+        if hasattr(self, "jobsInfoButton"):
+            self.jobsInfoButton.clicked.connect(self.show_jobs_tab_info)
 
         # Initial validation
         self.validate_form_request()
@@ -299,6 +305,20 @@ class ErmesQGISDialog(QDockWidget):
 
         # Setup job log widgets after all UI elements are loaded
         self.setup_job_log_widgets()
+
+    def _set_from_layer_tab_visibility(self, visible):
+        """Show/hide the From Layer tab without changing tab indexes."""
+        if not hasattr(self, "tabWidget"):
+            return
+        try:
+            self.tabWidget.setTabVisible(2, visible)
+        except Exception:
+            tab_bar = self.tabWidget.tabBar()
+            if tab_bar and hasattr(tab_bar, "setTabVisible"):
+                tab_bar.setTabVisible(2, visible)
+            elif not visible:
+                # Fallback for Qt builds without tab visibility support.
+                self.tabWidget.setTabEnabled(2, False)
 
     def _initialize_plugin_data(self):
         """Initialize plugin-specific data and settings"""
@@ -457,8 +477,9 @@ class ErmesQGISDialog(QDockWidget):
             self.loginInfoLabel.setText("Login Successful ✅")
             # Enable the Request and Jobs tabs
             self.tabWidget.setTabEnabled(1, True)
-            self.tabWidget.setTabEnabled(2, True)
             self.tabWidget.setTabEnabled(3, True)
+            self.tabWidget.setTabEnabled(2, False)
+            self._set_from_layer_tab_visibility(False)
             # Optionally, switch to the Request tab automatically
             self.tabWidget.setCurrentIndex(1)
 
@@ -705,6 +726,7 @@ class ErmesQGISDialog(QDockWidget):
         self.tabWidget.setTabEnabled(1, False)
         self.tabWidget.setTabEnabled(2, False)
         self.tabWidget.setTabEnabled(3, False)
+        self._set_from_layer_tab_visibility(False)
 
         # Switch to login tab
         self.tabWidget.setCurrentIndex(0)
@@ -723,6 +745,7 @@ class ErmesQGISDialog(QDockWidget):
         # Clear jobs table
         if hasattr(self, "jobsTableWidget"):
             self.jobsTableWidget.setRowCount(0)
+            self._update_jobs_action_buttons()
 
     # ------------------------------------------------------------------------------------------------
     # Helper methods for job monitoring
@@ -748,6 +771,15 @@ class ErmesQGISDialog(QDockWidget):
     # ------------------------------------------------------------------------------------------------
     # Jobs Tab
     # ------------------------------------------------------------------------------------------------
+    def show_jobs_tab_info(self):
+        """Show usage help for Job History table actions."""
+        QMessageBox.information(
+            self.content_widget,
+            "Job History",
+            "Select a row in Job History and click 'Download Selected' to download and load the result.\n\n"
+            "Only completed jobs with an available resource can be downloaded.",
+        )
+
     def setup_jobs_table(self):
         """Setup the jobs table with appropriate columns"""
         # Assuming the table is named jobsTableWidget
@@ -786,6 +818,38 @@ class ErmesQGISDialog(QDockWidget):
 
             # Hide the vertical header (row numbers)
             self.jobsTableWidget.verticalHeader().setVisible(False)
+            self.jobsTableWidget.itemSelectionChanged.connect(
+                self._update_jobs_action_buttons
+            )
+            self._update_jobs_action_buttons()
+
+    def _get_selected_job_row(self):
+        """Return the selected row index in jobs table, or -1 if no row is selected."""
+        if not hasattr(self, "jobsTableWidget"):
+            return -1
+        selection_model = self.jobsTableWidget.selectionModel()
+        if not selection_model:
+            return -1
+        selected_rows = selection_model.selectedRows()
+        if not selected_rows:
+            return -1
+        return selected_rows[0].row()
+
+    def _get_selected_job_id(self):
+        """Return selected job id as string, or None if no valid row is selected."""
+        row = self._get_selected_job_row()
+        if row < 0:
+            return None
+        job_item = self.jobsTableWidget.item(row, 0)
+        if not job_item:
+            return None
+        return job_item.text()
+
+    def _update_jobs_action_buttons(self):
+        """Enable/disable jobs action buttons based on table selection."""
+        has_selection = self._get_selected_job_row() >= 0
+        if hasattr(self, "downloadJobButton"):
+            self.downloadJobButton.setEnabled(has_selection)
 
     def _format_job_date(self, value):
         """Format ISO datetime string as date only for table display (e.g. 2024-06-15T12:00:00 -> 2024-06-15)."""
@@ -820,12 +884,15 @@ class ErmesQGISDialog(QDockWidget):
         if not hasattr(self, "jobsTableWidget"):
             return
 
+        selected_job_id = self._get_selected_job_id()
         self.jobsTableWidget.setRowCount(0)  # Clear existing rows
+        row_to_reselect = -1
 
         for job in jobs:
             # Show all jobs regardless of status
             row = self.jobsTableWidget.rowCount()
             self.jobsTableWidget.insertRow(row)
+            job_id = str(job.get("id", ""))
 
             datatype_id = job.get("body", {}).get("datatype_id", "")
             display_name = self.pipeline_id_to_name.get(datatype_id, datatype_id)
@@ -835,9 +902,7 @@ class ErmesQGISDialog(QDockWidget):
             granule_id = job.get("granule_id")
 
             # Add job data to table
-            self.jobsTableWidget.setItem(
-                row, 0, QTableWidgetItem(str(job.get("id", "")))
-            )
+            self.jobsTableWidget.setItem(row, 0, QTableWidgetItem(job_id))
             self.jobsTableWidget.setItem(row, 1, QTableWidgetItem(display_name))
             self.jobsTableWidget.setItem(
                 row, 2, QTableWidgetItem(job.get("status", ""))
@@ -866,15 +931,18 @@ class ErmesQGISDialog(QDockWidget):
             )
 
             self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
+            if selected_job_id is not None and job_id == selected_job_id:
+                row_to_reselect = row
+
+        if row_to_reselect >= 0:
+            self.jobsTableWidget.selectRow(row_to_reselect)
+        else:
+            self.jobsTableWidget.clearSelection()
+        self._update_jobs_action_buttons()
 
     def download_selected_jobs(self):
         """Download and load the selected job from the Jobs Table into QGIS"""
-        # Get the selected row: use selection if any, otherwise the current row (focus)
-        selected_items = self.jobsTableWidget.selectedItems()
-        if selected_items:
-            row = selected_items[0].row()
-        else:
-            row = self.jobsTableWidget.currentRow()
+        row = self._get_selected_job_row()
         if row < 0:
             self.update_status("No job selected for download.", "warning")
             return
