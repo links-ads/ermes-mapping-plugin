@@ -135,17 +135,17 @@
       </minMaxOrigin>
       <redContrastEnhancement>
         <minValue>0</minValue>
-        <maxValue>0.3</maxValue>
+        <maxValue>3000</maxValue>
         <algorithm>StretchToMinimumMaximum</algorithm>
       </redContrastEnhancement>
       <greenContrastEnhancement>
         <minValue>0</minValue>
-        <maxValue>0.3</maxValue>
+        <maxValue>3000</maxValue>
         <algorithm>StretchToMinimumMaximum</algorithm>
       </greenContrastEnhancement>
       <blueContrastEnhancement>
         <minValue>0</minValue>
-        <maxValue>0.3</maxValue>
+        <maxValue>3000</maxValue>
         <algorithm>StretchToMinimumMaximum</algorithm>
       </blueContrastEnhancement>
     </rasterrenderer>

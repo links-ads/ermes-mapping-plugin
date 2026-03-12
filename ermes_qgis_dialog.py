@@ -251,6 +251,21 @@ class ErmesQGISDialog(QDockWidget):
 
         self.requestPushButton.clicked.connect(self.send_request)
 
+        # Advanced options (Request tab): collapse/expand content when toggled
+        self.advancedOptionsContentWidget.setVisible(
+            self.advancedOptionsGroupBox.isChecked()
+        )
+        self.advancedOptionsGroupBox.toggled.connect(
+            lambda checked: self.advancedOptionsContentWidget.setVisible(checked)
+        )
+        self.cloudCoverSlider.valueChanged.connect(self._on_cloud_cover_slider_changed)
+        self._on_cloud_cover_slider_changed(self.cloudCoverSlider.value())
+        # Store backend values in combo box item data (display text is user-friendly)
+        self.stacOrderComboBox.setItemData(0, "datetime")
+        self.stacOrderComboBox.setItemData(1, "eo:cloud_cover")
+        self.stacDirectionComboBox.setItemData(0, "desc")
+        self.stacDirectionComboBox.setItemData(1, "asc")
+
         # From Layer
         self.rasterLayerComboBox.layerChanged.connect(self.validate_form_from_layer)
         self.imageTypeComboBox.currentTextChanged.connect(
@@ -1524,13 +1539,15 @@ class ErmesQGISDialog(QDockWidget):
             f"Rectangle drawn: {minx:.6f}, {miny:.6f} to {maxx:.6f}, {maxy:.6f}"
         )
 
-        # Deactivate map tool
-
         iface.mapCanvas().unsetMapTool(self.rectangleMapTool)
         self.rectangleMapTool = None
 
         # Re-validate the form
         self.validate_form_request()
+
+    def _on_cloud_cover_slider_changed(self, value):
+        """Update the cloud cover percentage label when the slider changes."""
+        self.cloudCoverValueLabel.setText(f"{value}%")
 
     # Send request (request tab)
     def send_request(self):
@@ -1603,6 +1620,22 @@ class ErmesQGISDialog(QDockWidget):
                     "start_date": start_dt,
                     "end_date": end_dt,
                 }
+                # Optional advanced STAC overrides
+                if self.advancedOptionsGroupBox.isChecked():
+                    job_data["stac_threshold"] = self.cloudCoverSlider.value()
+                    job_data["stac_order"] = self.stacOrderComboBox.currentData() or (
+                        "eo:cloud_cover"
+                        if self.stacOrderComboBox.currentIndex() == 1
+                        else "datetime"
+                    )
+                    job_data["stac_direction"] = (
+                        self.stacDirectionComboBox.currentData()
+                        or (
+                            "asc"
+                            if self.stacDirectionComboBox.currentIndex() == 1
+                            else "desc"
+                        )
+                    )
 
                 try:
                     job_response = requests.post(

@@ -574,6 +574,130 @@
                </property>
               </widget>
              </item>
+             <item row="22" column="0" colspan="2">
+              <widget class="QGroupBox" name="advancedOptionsGroupBox">
+               <property name="title">
+                <string>Advanced options</string>
+               </property>
+               <property name="checkable">
+                <bool>true</bool>
+               </property>
+               <property name="checked">
+                <bool>false</bool>
+               </property>
+               <layout class="QVBoxLayout" name="advancedOptionsOuterLayout">
+                <item>
+                 <widget class="QWidget" name="advancedOptionsContentWidget">
+                  <property name="visible">
+                   <bool>false</bool>
+                  </property>
+                  <layout class="QGridLayout" name="advancedOptionsLayout">
+                   <item row="0" column="0">
+                    <widget class="QLabel" name="cloudCoverLabel">
+                     <property name="text">
+                      <string>Cloud cover (%)</string>
+                     </property>
+                     <property name="toolTip">
+                      <string>Maximum cloud cover percentage (0-100). Applied when ordering by cloud cover.</string>
+                     </property>
+                    </widget>
+                   </item>
+                <item row="0" column="1">
+                 <layout class="QHBoxLayout" name="cloudCoverLayout">
+                  <item>
+                   <widget class="QSlider" name="cloudCoverSlider">
+                    <property name="minimum">
+                     <number>0</number>
+                    </property>
+                    <property name="maximum">
+                     <number>100</number>
+                    </property>
+                    <property name="value">
+                     <number>20</number>
+                    </property>
+                    <property name="orientation">
+                     <enum>Qt::Horizontal</enum>
+                    </property>
+                    <property name="toolTip">
+                     <string>Maximum cloud cover percentage</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QLabel" name="cloudCoverValueLabel">
+                    <property name="minimumSize">
+                     <size>
+                      <width>30</width>
+                      <height>0</height>
+                     </size>
+                    </property>
+                    <property name="text">
+                     <string>20%</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+                <item row="1" column="0">
+                 <widget class="QLabel" name="stacOrderLabel">
+                  <property name="text">
+                   <string>Order by</string>
+                  </property>
+                  <property name="toolTip">
+                   <string>STAC sort field: datetime or cloud cover</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="1" column="1">
+                 <widget class="QComboBox" name="stacOrderComboBox">
+                  <property name="toolTip">
+                   <string>Order results by date or cloud cover</string>
+                  </property>
+                  <item>
+                   <property name="text">
+                    <string>Date</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Cloud Cover</string>
+                   </property>
+                  </item>
+                 </widget>
+                </item>
+                <item row="2" column="0">
+                 <widget class="QLabel" name="stacDirectionLabel">
+                  <property name="text">
+                   <string>Direction</string>
+                  </property>
+                  <property name="toolTip">
+                   <string>Sort direction: ascending or descending</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="2" column="1">
+                 <widget class="QComboBox" name="stacDirectionComboBox">
+                  <property name="toolTip">
+                   <string>Sort direction for STAC results</string>
+                  </property>
+                  <item>
+                   <property name="text">
+                    <string>Descending (least cloudy / earliest)</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Ascending (most cloudy / latest)</string>
+                   </property>
+                  </item>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
              <item row="21" column="1">
               <layout class="QHBoxLayout" name="horizontalLayout_6">
                <item>
