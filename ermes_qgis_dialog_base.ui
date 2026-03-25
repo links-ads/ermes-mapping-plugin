@@ -574,7 +574,7 @@
                </property>
               </widget>
              </item>
-             <item row="22" column="0" colspan="2">
+             <item row="22" column="1">
               <widget class="QGroupBox" name="advancedOptionsGroupBox">
                <property name="title">
                 <string>Advanced options</string>
@@ -695,7 +695,7 @@
                 <item row="3" column="0" colspan="2">
                  <widget class="QCheckBox" name="polygonOutputCheckBox">
                   <property name="text">
-                   <string>Output polygons for Burned area / Waterbody</string>
+                   <string>Vectorize outputs (available only for Burned area / Waterbody delineation)</string>
                   </property>
                   <property name="toolTip">
                    <string>When enabled, Burned area delineation and Waterbody delineation results are merged and polygonized (by value, excluding 0) instead of loaded as raster tiles.</string>
