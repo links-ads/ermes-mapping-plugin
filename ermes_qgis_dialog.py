@@ -790,10 +790,11 @@ class ErmesQGISDialog(QDockWidget):
         """Setup the jobs table with appropriate columns"""
         # Assuming the table is named jobsTableWidget
         if hasattr(self, "jobsTableWidget"):
-            self.jobsTableWidget.setColumnCount(9)
+            self.jobsTableWidget.setColumnCount(10)
             self.jobsTableWidget.setHorizontalHeaderLabels(
                 [
                     "ID",
+                    "Request Name",
                     "Layer Type",
                     "Status",
                     "Status Message",
@@ -808,19 +809,24 @@ class ErmesQGISDialog(QDockWidget):
             # Set column widths
             header = self.jobsTableWidget.horizontalHeader()
             header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID
-            header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Layer Type
-            header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Status
+            header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Request Name
+            header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Layer Type
             header.setSectionResizeMode(
-                3, QHeaderView.Fixed
+                3, QHeaderView.ResizeToContents
+            )  # Status
+            header.setSectionResizeMode(
+                4, QHeaderView.Fixed
             )  # Status Message (fixed, reduced width)
-            header.resizeSection(3, 160)
-            header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Created
-            header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Start Date
-            header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # End Date
+            header.resizeSection(4, 160)
+            header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Created
+            header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Start Date
             header.setSectionResizeMode(
                 7, QHeaderView.ResizeToContents
+            )  # End Date
+            header.setSectionResizeMode(
+                8, QHeaderView.ResizeToContents
             )  # Acquisition Date
-            header.setSectionResizeMode(8, QHeaderView.ResizeToContents)  # Granule ID
+            header.setSectionResizeMode(9, QHeaderView.ResizeToContents)  # Granule ID
 
             # Hide the vertical header (row numbers)
             self.jobsTableWidget.verticalHeader().setVisible(False)
@@ -930,36 +936,42 @@ class ErmesQGISDialog(QDockWidget):
             display_name = self.pipeline_id_to_name.get(datatype_id, datatype_id)
             start_date = job.get("body", {}).get("start_date", "")
             end_date = job.get("body", {}).get("end_date", "")
+            request_name = job.get("request_name", "")
             acq = job.get("acquisition_date")
             granule_id = job.get("granule_id")
 
             # Add job data to table
             self.jobsTableWidget.setItem(row, 0, QTableWidgetItem(job_id))
-            self.jobsTableWidget.setItem(row, 1, QTableWidgetItem(display_name))
             self.jobsTableWidget.setItem(
-                row, 2, QTableWidgetItem(job.get("status", ""))
+                row, 1, QTableWidgetItem(str(request_name) if request_name else "")
             )
+            self.jobsTableWidget.setItem(row, 2, QTableWidgetItem(display_name))
             self.jobsTableWidget.setItem(
-                row, 3, QTableWidgetItem(job.get("result", ""))
+                row, 3, QTableWidgetItem(job.get("status", ""))
             )
             self.jobsTableWidget.setItem(
                 row,
                 4,
+                QTableWidgetItem(job.get("result", "")),
+            )
+            self.jobsTableWidget.setItem(
+                row,
+                5,
                 QTableWidgetItem(
                     self._format_job_datetime(job.get("created_at", "")) or ""
                 ),
             )
             self.jobsTableWidget.setItem(
-                row, 5, QTableWidgetItem(self._format_job_date(start_date) or "")
+                row, 6, QTableWidgetItem(self._format_job_date(start_date) or "")
             )
             self.jobsTableWidget.setItem(
-                row, 6, QTableWidgetItem(self._format_job_date(end_date) or "")
+                row, 7, QTableWidgetItem(self._format_job_date(end_date) or "")
             )
             self.jobsTableWidget.setItem(
-                row, 7, QTableWidgetItem(self._format_job_date(acq) if acq else "")
+                row, 8, QTableWidgetItem(self._format_job_date(acq) if acq else "")
             )
             self.jobsTableWidget.setItem(
-                row, 8, QTableWidgetItem(str(granule_id) if granule_id else "")
+                row, 9, QTableWidgetItem(str(granule_id) if granule_id else "")
             )
 
             self.jobsTableWidget.item(row, 0).setData(Qt.UserRole, job)
@@ -1246,6 +1258,8 @@ class ErmesQGISDialog(QDockWidget):
                 "polygonLayerComboBox",
                 "label_4",
                 "timeRangeLabel",
+                "requestNameLabel",
+                "requestNameLineEdit",
                 "startDateLineEdit",
                 "timeLabel",
                 "endDateLineEdit",
@@ -1767,6 +1781,7 @@ class ErmesQGISDialog(QDockWidget):
             job_url = f"{self.api_base_url}{self.config.api_endpoints['jobs_create']}"
             start_dt = self.startDateLineEdit.text()
             end_dt = self.endDateLineEdit.text()
+            request_name = self.requestNameLineEdit.text().strip()
             for item in selected_items:
                 pipeline_text = item.data(Qt.UserRole)
                 datatype_id = self.pipeline_map[pipeline_text]
@@ -1776,6 +1791,8 @@ class ErmesQGISDialog(QDockWidget):
                     "start_date": start_dt,
                     "end_date": end_dt,
                 }
+                if request_name:
+                    job_data["request_name"] = request_name
                 # Always send STAC parameters:
                 # - custom values only when advanced options are active+checked
                 # - defaults when advanced options are inactive/unchecked
